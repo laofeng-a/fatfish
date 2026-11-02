@@ -1,0 +1,5 @@
+{
+  "origin": "https://second-brain.example.invalid",
+  "upstream_key_file": "/etc/picoclaw-memory/upstream.key",
+  "local_token_file": "/etc/picoclaw-memory/local.token"
+}

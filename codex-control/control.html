@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="light"><title>大肥鱼 × jg · 共用 Codex</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/control.css"><script defer src="/control.js"></script>
+</head>
+<body>
+  <button id="scrim" tabindex="-1" aria-label="关闭会话列表" hidden></button>
+  <aside id="sidebar">
+    <a class="brand" href="/" aria-label="共用 Codex 首页">
+      <svg class="fish" viewBox="0 0 40 40" fill="none" aria-hidden="true"><path d="M7 20c4-8 14-11 21-6l6-4-1 10 1 10-6-4C21 31 11 28 7 20Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="16" cy="18" r="1.6" fill="currentColor"/><path d="m21 11 2-4M11 10 9 7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      <div><h1>共用 Codex</h1><span>大肥鱼 <i>×</i> jg</span></div>
+    </a>
+    <form id="search" role="search"><div class="search-field"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><input id="query" aria-label="搜索会话或项目" placeholder="搜索会话或项目"><button type="submit" aria-label="查找会话">↵</button></div></form>
+    <div class="section-label"><span>最近会话</span><span id="thread-count"></span></div>
+    <nav id="threads" aria-label="会话列表"><p class="sidebar-empty">正在连接你的会话…</p></nav>
+    <div class="sidebar-bottom"><button id="phone-open" class="phone-button"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M10 18h4"/></svg><span>手机访问</span><span class="phone-arrow">↗</span></button><div class="connection" id="connection" role="status" data-state="connecting"><span class="dot"></span><span id="connection-label">正在连接</span></div><p id="bridge-label">检查本机与大肥鱼的连接</p><div class="account"><span class="avatar small">jg</span><div><strong>jg 的工作台</strong><span>与你的大肥鱼一起继续</span></div><span class="local-dot" title="仅此电脑"></span></div></div>
+  </aside>
+  <main>
+    <header>
+      <div class="heading"><div class="eyebrow"><button id="menu" aria-label="打开会话列表" aria-expanded="false">☰</button><span>工作台</span><span class="slash">/</span><span>共用会话</span></div><h2 id="title">把想法接着做下去</h2><div class="session-meta"><span id="branch-kind">同一份上下文，一起继续</span><span class="meta-divider">·</span><span id="sync-state">等待连接</span></div></div>
+      <div class="header-actions"><button id="usage" class="quiet-button" title="只读查询Codex剩余额度">用量</button><span id="session-status" class="pill">尚未选择</span><button id="refresh" class="icon-button" aria-label="刷新对话" title="刷新对话" disabled>↻</button><button id="stop" class="quiet-button" disabled><span class="stop-icon"></span>停止</button><button id="attach" class="quiet-button" disabled>设为共用</button><details class="session-info"><summary aria-label="会话说明" title="会话说明">ⓘ</summary><div><strong>和 Codex 桌面共用原生会话</strong><p>这页按需读取同一条会话历史，追加消息进入原生队列，由 Codex 桌面继续执行。</p><p>模型沿用桌面选择。队列接收和任务完成会分别显示；旧的历史分支仍可查看。</p><p id="identity">选择会话后显示编号</p></div></details></div>
+    </header>
+    <div class="notice-wrap"><div id="notice" role="status" hidden><span id="notice-text"></span><button id="retry" hidden>重试连接</button><button id="dismiss" aria-label="收起提示">×</button></div></div>
+    <div class="history-top"><button id="older" hidden>↑ 查看更早的对话</button></div>
+    <section id="history" aria-label="对话记录" aria-busy="true" tabindex="0"><div class="welcome"><div class="welcome-mark">✳</div><p class="eyebrow">A LITTLE SPACE TO THINK</p><h3>想法在这里，接着往前。</h3><p>选一条会话，和大肥鱼一起查看进展、补充想法。<br>工具记录收在旁边，对话留在眼前。</p></div></section>
+    <div class="history-controls"><button id="latest" hidden>回到最新 ↓</button></div>
+    <div class="compose-wrap"><form id="composer"><label class="sr-only" for="text">发送任务或补充想法</label><textarea id="text" rows="2" maxlength="12000" placeholder="有什么想接着做的，jg？" disabled></textarea><footer><span id="compose-context"><span class="context-dot"></span>选择会话后，就可以一起继续</span><button id="send" aria-label="发送 / 追加" title="发送 · Ctrl + Enter" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg></button></footer></form><div class="compose-note"><span>正在执行时，发送会补充到当前任务。</span><span>Ctrl + Enter 发送</span></div></div>
+  </main>
+  <dialog id="phone-dialog"><form method="dialog" class="dialog-heading"><div><p class="eyebrow">TAKE IT WITH YOU</p><h3>在手机上，接着聊。</h3></div><button aria-label="关闭手机访问">×</button></form><p id="phone-description">正在检查手机入口…</p><a id="phone-link" target="_blank" rel="noopener noreferrer" hidden></a><div class="phone-dialog-actions"><button id="phone-copy" hidden>复制手机链接</button><button id="phone-refresh">刷新状态</button></div><p class="dialog-footnote">手机和电脑使用同一个执行端。电脑需保持开机；试用入口重启后地址会变化。</p></dialog>
+</body>
+</html>

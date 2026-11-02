@@ -1,0 +1,37 @@
+# Local credentials and data
+.secrets/
+.env
+.env.*
+!.env.example
+/private/
+/profiles/
+/state/
+/sessions/
+/logs/
+/backups/
+/media/
+/server-setup/state/
+/codex-control/state/
+/x-reader/state/
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.pem
+*.key
+*.token
+*.cookie
+cookies*.txt
+auth.json
+config.local.json
+# Generated environments and binaries
+__pycache__/
+*.py[cod]
+.venv/
+node_modules/
+build/
+dist/
+*.exe
+*.dll
+*.zip
+*.tar.gz

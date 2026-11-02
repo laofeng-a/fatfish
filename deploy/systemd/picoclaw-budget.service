@@ -1,0 +1,35 @@
+[Unit]
+Description=Local spending gate for the personal assistant
+Wants=network-online.target
+Requires=picoclaw-egress.service
+After=network-online.target picoclaw-egress.service
+ConditionPathExists=/etc/picoclaw-budget/settings.json
+ConditionPathExists=/etc/picoclaw-budget/upstream.key
+ConditionPathExists=/etc/picoclaw-budget/local.token
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+EnvironmentFile=-/etc/picoclaw/private.env
+Type=simple
+User=picobudget
+Group=picobudget
+WorkingDirectory=/var/lib/picoclaw-budget
+ExecStart=/usr/bin/python3 /opt/picoclaw/fatfish-v1/budget-gateway.py /etc/picoclaw-budget/settings.json
+Environment=PYTHONDONTWRITEBYTECODE=1
+Restart=on-failure
+RestartSec=15
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/picoclaw-budget /var/lib/picoclaw-readers
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+MemoryMax=64M
+TasksMax=8
+CPUQuota=25%
+
+[Install]
+WantedBy=multi-user.target

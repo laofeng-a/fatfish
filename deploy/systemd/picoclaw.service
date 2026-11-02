@@ -1,0 +1,43 @@
+[Unit]
+Description=Personal PicoClaw assistant
+Wants=network-online.target picoclaw-memory.service
+Requires=picoclaw-budget.service
+After=network-online.target picoclaw-budget.service picoclaw-memory.service
+# Activation is a separate step after credentials and spending controls are ready.
+ConditionPathExists=/var/lib/picoclaw/.picoclaw/READY
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+EnvironmentFile=-/etc/picoclaw/private.env
+Type=simple
+User=picoclaw
+Group=picoclaw
+WorkingDirectory=/var/lib/picoclaw
+Environment=HOME=/var/lib/picoclaw
+Environment=PICOCLAW_HOME=/var/lib/picoclaw/.picoclaw
+Environment=PICOCLAW_CONFIG=/var/lib/picoclaw/.picoclaw/config.json
+Environment=TZ=Asia/Shanghai
+Environment=GOMEMLIMIT=96MiB
+Environment=FATFISH_RUNTIME_TOKEN_FILE=/var/lib/picoclaw/.picoclaw/runtime.token
+Environment=FATFISH_IMAGE_PYTHON=/opt/picoclaw/readers-venv/bin/python
+Environment=FATFISH_IMAGE_WORKER=/opt/picoclaw/fatfish-v1/image_worker.py
+Environment=TMPDIR=/var/lib/picoclaw/.picoclaw/workspace/media/tmp
+ExecStart=/usr/local/bin/picoclaw gateway
+Restart=on-failure
+RestartSec=15
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/picoclaw /var/lib/picoclaw-readers/media.lock
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+MemoryHigh=128M
+MemoryMax=160M
+TasksMax=64
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target

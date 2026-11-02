@@ -1,0 +1,12 @@
+{
+  "owner_id": "YOUR_TELEGRAM_USER_ID",
+  "state_dir": "/var/lib/picoclaw-readers",
+  "catalog_file": "/etc/picoclaw/emotes.json",
+  "pulse_policy": {
+    "enabled": true,
+    "existing_maintenance_ids": []
+  },
+  "exploration_opportunities": {
+    "enabled": false
+  }
+}

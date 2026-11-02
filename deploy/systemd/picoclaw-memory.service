@@ -1,0 +1,29 @@
+[Unit]
+Description=Bounded personal tools and authorization policy
+Wants=network-online.target
+Requires=picoclaw-egress.service
+After=network-online.target picoclaw-egress.service
+ConditionPathExists=/etc/picoclaw-memory/settings.json
+
+[Service]
+EnvironmentFile=-/etc/picoclaw/private.env
+Type=notify
+User=picobudget
+Group=picobudget
+ExecStart=/usr/bin/python3 /opt/picoclaw/fatfish-v1/memory-reader.py
+Environment=PYTHONDONTWRITEBYTECODE=1
+Restart=on-failure
+RestartSec=15
+TimeoutStartSec=15
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/picoclaw-readers
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+MemoryHigh=64M
+MemoryMax=96M
+TasksMax=24
+CPUQuota=50%

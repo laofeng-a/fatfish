@@ -752,7 +752,7 @@ func (c *TelegramChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMe
 		msg = telegramClearMediaCaptions(msg)
 	}
 
-	if len(msg.Parts) > 1 && telegramCanSendMediaGroup(msg.Parts) {
+	if len(msg.Parts) > 1 && telegramCanSendMediaGroup(msg.Parts) && !telegramHasEmoteAssets(store, msg.Parts) {
 		groupIDs, err := c.sendImageMediaGroups(ctx, chatID, threadID, store, msg.Parts)
 		if err != nil {
 			logger.ErrorCF("telegram", "Failed to send media group", map[string]any{
@@ -779,6 +779,14 @@ func (c *TelegramChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMe
 			})
 			continue
 		}
+		part.Type = telegramMediaType(part.Type, localPath)
+		var emote *emoteUse
+		if fatfish.Enabled() && telegramEmoteAsset(localPath) {
+			emote, err = prepareEmoteUse(localPath, emoteCatalogPath(), emoteStatePath())
+			if err != nil {
+				return messageIDs, fmt.Errorf("emote rule: %w", err)
+			}
+		}
 
 		file, err := os.Open(localPath)
 		if err != nil {
@@ -791,6 +799,24 @@ func (c *TelegramChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMe
 
 		var tgResult *telego.Message
 		switch part.Type {
+		case "sticker":
+			if part.Caption != "" {
+				captionIDs, captionErr := c.sendCaptionText(ctx, chatID, threadID, part.Caption)
+				if captionErr != nil {
+					file.Close()
+					return messageIDs, captionErr
+				}
+				messageIDs = append(messageIDs, captionIDs...)
+			}
+			tgResult, err = c.bot.SendSticker(ctx, &telego.SendStickerParams{
+				ChatID: tu.ID(chatID), MessageThreadID: threadID,
+				Sticker: telego.InputFile{File: file},
+			})
+		case "animation":
+			tgResult, err = c.bot.SendAnimation(ctx, &telego.SendAnimationParams{
+				ChatID: tu.ID(chatID), MessageThreadID: threadID,
+				Animation: telego.InputFile{File: file}, Caption: part.Caption,
+			})
 		case "image":
 			params := &telego.SendPhotoParams{
 				ChatID:          tu.ID(chatID),
@@ -854,6 +880,17 @@ func (c *TelegramChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMe
 
 		if tgResult != nil {
 			messageIDs = append(messageIDs, strconv.Itoa(tgResult.MessageID))
+			if emote != nil && err == nil {
+				if recordErr := emote.record(fmt.Sprint(chatID), tgResult.MessageID); recordErr != nil {
+					file.Close()
+					return messageIDs, fmt.Errorf("message %d delivered; emote bookkeeping failed: %w", tgResult.MessageID, recordErr)
+				}
+				logger.InfoCF("telegram", "Emote delivery confirmed", map[string]any{
+					"message_id": tgResult.MessageID, "emote_id": emote.id,
+					"media_type": part.Type, "recorded": true,
+					"sticker_response": tgResult.Sticker != nil,
+				})
+			}
 		}
 		file.Close()
 
@@ -871,6 +908,16 @@ func (c *TelegramChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMe
 	}
 
 	return messageIDs, nil
+}
+
+func telegramHasEmoteAssets(store media.MediaStore, parts []bus.MediaPart) bool {
+	for _, part := range parts {
+		path, err := store.Resolve(part.Ref)
+		if err == nil && telegramEmoteAsset(path) {
+			return true
+		}
+	}
+	return false
 }
 
 func telegramCanSendMediaGroup(parts []bus.MediaPart) bool {

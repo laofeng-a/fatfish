@@ -12,6 +12,7 @@
 | `server-setup/` | 从线上读取的 Python 工具、模型中转、记忆、调度、协作桥与测试 |
 | `codex-control/` | Windows 本机连接器和相关测试；已安装文件优先于工作区旧副本 |
 | `x-reader/` | X 读取组件及依赖清单 |
+| `workspace-tools/` | 工作区的一次调用表情挑选、发送和记账脚本 |
 | `config/` | 不含凭据的配置样例 |
 | `templates/` | 通用提示词起点，不含个人相处记录 |
 | `deploy/systemd/` | 当前服务单元的脱敏模板 |
@@ -35,13 +36,14 @@ Go 版本以 `picoclaw/go.mod` 为准，当前要求 **1.25.11**。例如：
 ```sh
 cd picoclaw
 go test ./pkg/fatfish
-go build -o ../build/picoclaw ./cmd/picoclaw
+go build -tags goolm,stdjson -o ../build/picoclaw ./cmd/picoclaw
 ```
 
 Python 模块通常通过标准库运行，媒体功能另需对应依赖和外部工具。可先运行隔离测试：
 
 ```sh
 python server-setup/test-tool-efficiency.py
+python workspace-tools/test_emotes.py
 ```
 
 部分旧测试保留了早期权限与接口断言，不能为通过旧测试而恢复已经取消的产品限制。该源码导入没有重新执行所有上游测试或所有外部平台验收。

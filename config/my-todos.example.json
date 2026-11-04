@@ -1,0 +1,5 @@
+{
+  "page_id": "00000000-0000-0000-0000-000000000000",
+  "token_file": "/etc/picoclaw-memory/notion.token",
+  "snapshot_file": "/var/lib/picoclaw-readers/context/my-todos.json"
+}

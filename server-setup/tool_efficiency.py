@@ -13,6 +13,7 @@ CACHE_TTLS = {'emote_find': 300, 'telegram_chats': 300, 'emote_history': 300,
               'chat_status': 1, 'notion': 30}
 
 PARALLEL_READS = frozenset((
+    'my_todos', 'chat_recall', 'diary_prepare', 'codex_overview',
     'emote_find', 'emote_history', 'telegram_chats', 'history_find',
     'history_expand', 'chat_status', 'memory_note_read', 'memory_find',
     'recall', 'get', 'list_recent', 'yesterday_health', 'x_feed', 'x_post_read',

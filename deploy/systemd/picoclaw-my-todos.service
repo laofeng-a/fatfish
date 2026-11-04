@@ -1,0 +1,13 @@
+[Unit]
+Description=Sync Fatfish personal Notion todos
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=picobudget
+Group=picobudget
+UMask=0027
+ExecStart=/usr/bin/python3 /opt/picoclaw/fatfish-v1/notion_todos.py
+TimeoutStartSec=120
+

@@ -22,6 +22,7 @@
 
 - Telegram 私聊与群聊，通过真实消息和投递回执记录交流。
 - 聊天历史、版本化文字记忆、记忆纠正、日记与维护流程。
+- Notion 待办后台同步，每轮私聊注入“我的待办”；常用读取由 chat_recall、diary_prepare、codex_overview 一次取齐。
 - 旧工具结果折叠、聊天摘要与压缩原文归档。
 - 工具搜索后按需加载详细 schema；短 AGENT 常驻，具体流程按需读取。
 - Codex、DSH、Claude Code 的协作入口；具体可用性取决于相应连接器与登录状态。
@@ -43,6 +44,7 @@ Python 模块通常通过标准库运行，媒体功能另需对应依赖和外�
 
 ```sh
 python server-setup/test-tool-efficiency.py
+python server-setup/test-common-workflows.py
 python workspace-tools/test_emotes.py
 ```
 
@@ -58,6 +60,6 @@ python workspace-tools/test_emotes.py
 
 上游：[sipeed/picoclaw](https://github.com/sipeed/picoclaw)，基础提交 `2cf030d2fd3b871d7ec17e3be34c24688aac76da`。本仓库包含该基础上的工作区修改，不是上游官方发行版。
 
-来源、原始线上源码 SHA256、脱敏文件列表和桌面连接器取源位置见 [source-snapshot.json](docs/source-snapshot.json)。当前服务源码取自线上，主程序源码与已部署构建记录对应；Go 源码导入后尚未重新构建二进制。
+来源、原始线上源码 SHA256、脱敏文件列表和桌面连接器取源位置见 [source-snapshot.json](docs/source-snapshot.json)。后续构建、部署与验收见 [11 月 3 日](docs/RELEASE-2026-11-03.md)和 [11 月 4 日发布记录](docs/RELEASE-2026-11-04.md)。
 
 仓库只作源码版本管理。提交代码不会自动部署，也没有启用上游发布工作流。

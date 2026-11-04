@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh Fatfish personal Notion todos every five minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+Unit=picoclaw-my-todos.service
+
+[Install]
+WantedBy=timers.target

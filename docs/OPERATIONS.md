@@ -35,7 +35,7 @@ Windows 连接器安装目录通常为 `%USERPROFILE%\.codex\fatfish-codex`。SS
 2. 在本机源码仓库修改并运行相关测试。涉及真实发送的验收单独安排。
 3. 改前备份涉及的源码、配置与 profile 版本；数据库备份单独保管。
 4. 部署涉及的文件，只重启实际加载这些文件的服务。
-5. 核对服务状态、日志、实际读取与真实回执，留回滚入口。
+5. 核对服务状态、日志、实际读取与真实回执，留回滚入口；使用实际服务账号检查profile和快照的读取权限。备份复制不保留文件归属，部署记录需单独保存源文件uid/gid/mode。
 6. 在源码仓库提交最终变化；凭据、聊天和运行记录留在私有数据备份中。
 
 人格写入沿用 `memory_note_read/write` 或 `MemoryNotes.write`，带最新 `expected_revision` 并读回。源码仓库的模板不覆盖线上后续修订。
@@ -51,6 +51,35 @@ Windows 连接器安装目录通常为 `%USERPROFILE%\.codex\fatfish-codex`。SS
 原生 `send_file` 对 `assets/emotes` 内的 `.webm` 使用贴纸、`.jpg/.png` 使用图片、`.gif/.mp4` 使用动画；普通目录的文件和视频沿用原来的类型。多张库内表情逐张发送和记账，普通图片组行为沿用原实现。
 
 本次发布和真实回执见 [2026-11-03 发布记录](RELEASE-2026-11-03.md)。
+
+## 我的待办与常用读取
+
+把 `config/my-todos.example.json` 的页面编号和凭据文件位置填入服务器 `/etc/picoclaw-memory/my-todos.json`，实际配置留在服务器。`notion_todos.py` 读取该页复选框，翻页并读取嵌套子任务，保留任务原话和来源链接。父子勾选状态各自判断。失败保留上次完整快照与成功时间，不把失败当作清空。
+
+`picoclaw-my-todos.timer` 每5分钟运行一次同步服务。快照在 `/var/lib/picoclaw-readers/context/my-todos.json`，由工具服务账号写、主服务账号读；目录组按实例配置并保留继承组权限。每轮jg私聊的动态上下文读取快照，群聊不注入。简表超过24KB时明确提示剩余数量，完整原文由 `my_todos` 读取。
+
+四个入口注册在同一 MCP 工具服务，沿用按需发现：
+
+| 工具 | 用途 |
+|---|---|
+| `my_todos` | 读完整待办快照；`refresh=true` 立即同步 |
+| `chat_recall` | 搜索并取命中原文、前后文和source_id；可按会话与时间筛选 |
+| `diary_prepare` | 取指定UTC+8日期的真实聊天、阅读记录、已有日记与revision；next_cursor续页 |
+| `codex_overview` | 取绑定会话的连接、进展、请求回执及最近额度快照；refresh沿现有read刷新 |
+
+命令行也可通过同一接口读取，不需要把凭据放到命令参数中：
+
+```sh
+sudo -u picobudget python3 /opt/picoclaw/fatfish-v1/common_workflows.py my_todos
+sudo -u picobudget python3 /opt/picoclaw/fatfish-v1/common_workflows.py chat_recall --arguments '{"query":"待办","limit":2}'
+sudo -u picobudget python3 /opt/picoclaw/fatfish-v1/common_workflows.py diary_prepare
+sudo -u picobudget python3 /opt/picoclaw/fatfish-v1/common_workflows.py codex_overview
+systemctl status picoclaw-my-todos.timer
+```
+
+日记工具只准备材料，正文由模型整理，保存仍用版本化 `memory_note_write`。其 `readback_verified=true` 已包含写后核对。Codex概览默认只读本地快照，不派发任务；额度与进展均按返回时间理解，不能把桥接请求的done当作任务完成。
+
+提示模板见 [COMMON-WORKFLOWS.md](../templates/COMMON-WORKFLOWS.md)，部署时合入最新 AGENT，详细流程合入工作区指南，不覆盖已有个人版本。真实验收与回滚见 [11 月 4 日发布记录](RELEASE-2026-11-04.md)。
 
 ## 源码导入边界
 

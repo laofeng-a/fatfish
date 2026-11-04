@@ -32,6 +32,7 @@ from pulse_policy import PulsePolicy
 from todo_tasks import TodoTasks
 from diary_maintenance import DiaryMaintenance
 from tool_efficiency import sent_media
+from common_workflows import CommonWorkflows, TOOLS as COMMON_WORKFLOW_TOOLS, NAMES as COMMON_WORKFLOW_NAMES
 from memory_recall import MemoryRecall,normalized
 from memory_learning import MemoryLearning
 from exploration_opportunities import ExplorationOpportunities
@@ -128,6 +129,7 @@ _claude_tool=json.loads(json.dumps(next(t for t in TOOLS if t['name']=='dsh'),en
 _claude_tool.update(name='claude_code',description='指挥本机Claude Code：list列会话，read看进展，create(title,cwd)预留新会话编号，send发任务，continue续聊或代答，finish完成收口（status省略为completed），wait_for_jg等jg，stop停止自己提交的执行。沿用真实thread_id；省略时沿用当前绑定。answers={call_id,answers:{问题原文:回答}}回复待答问题。结果返回自动唤醒，可先处理别的事情。继承本机模型、工具和配置。')
 _claude_tool['inputSchema']['properties']['answers']['description']='回应Claude Code待答问题：{call_id,answers:{问题原文:回答}}'
 TOOLS.append(_claude_tool)
+TOOLS.extend(COMMON_WORKFLOW_TOOLS)
 
 # Draft only: the deployment setting is absent/False by default.
 _EXPLICIT_INTERNAL_NOTE_HEADER=re.compile(
@@ -200,6 +202,7 @@ class Runtime:
         self.memory_recall=MemoryRecall(self)
         self.learning=MemoryLearning(self)
         self.exploration=ExplorationOpportunities(self)
+        self.workflows=CommonWorkflows(self)
 
     @contextmanager
     def db(self):
@@ -603,6 +606,7 @@ class Runtime:
         args,context,chat=self.context(args)
         background_mode='background' if context.get('session_key')=='heartbeat' else None
         self.platform_consent.ensure(name,args,context,chat)
+        if name in COMMON_WORKFLOW_NAMES:return self.workflows.call(name,args,context,chat)
         if name=='notion':
             result=self.notion.call(args)
             if args.get('action') in ('create','append','update'):

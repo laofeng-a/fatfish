@@ -36,6 +36,7 @@ func boundedMemory(path string, limit int) string {
 
 func (cb *ContextBuilder) fatfishMemoryContext() string {
 	var text strings.Builder
+	text.WriteString(fatfishTodoContext())
 	core := os.Getenv("FATFISH_STRUCTURED_CORE_FILE")
 	if core != "" {
 		if content := boundedMemory(core, 6000); content != "" {

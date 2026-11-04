@@ -42,6 +42,65 @@ type Material struct {
 	Rejection string            `json:"previous_rejection_reason,omitempty"`
 }
 
+var proseQuotes = regexp.MustCompile(`[“「"]([^”」"\n]{2,})[”」"]`)
+var quoteReference = regexp.MustCompile(`\{\{q([0-9]+)\}\}`)
+
+// Quotes are checked against real sources before rendering. A reference inserts
+// the recorded speaker and exact text together, keeping editorial paraphrases
+// outside quotation marks.
+func renderQuoteReferences(prose string, quotes []Quote) (string, error) {
+	var invalid bool
+	text := quoteReference.ReplaceAllStringFunc(prose, func(ref string) string {
+		var number int
+		if _, err := fmt.Sscanf(ref, "{{q%d}}", &number); err != nil || number < 1 || number > len(quotes) {
+			invalid = true
+			return ref
+		}
+		q := quotes[number-1]
+		return q.Speaker + "：“" + q.Text + "”"
+	})
+	if invalid || strings.Contains(text, "{{q") {
+		return "", fmt.Errorf("invalid_quote_reference")
+	}
+	return text, nil
+}
+
+func proseQuoteHasSource(text string, m Material) bool {
+	if m.Previous.Version > 0 && strings.Contains(m.Previous.Body, text) {
+		return true
+	}
+	for _, source := range m.Previous.Quotes {
+		if strings.Contains(source.Text, text) {
+			return true
+		}
+	}
+	for _, t := range m.Past {
+		if strings.Contains(t.User, text) {
+			return true
+		}
+		for _, d := range t.Deliveries {
+			if d.State == "sent" && strings.Contains(d.Text, text) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// This is a repair request, never a replacement summary or fallback extract.
+// The revised response must pass the same validation before it can activate.
+func QuoteRepairInstruction(c Candidate, m Material) string {
+	prose, _ := renderQuoteReferences(c.Summary, c.Quotes)
+	var missing []string
+	for _, quote := range proseQuotes.FindAllStringSubmatch(prose, -1) {
+		if !proseQuoteHasSource(quote[1], m) {
+			missing = append(missing, quote[1])
+		}
+	}
+	data, _ := json.Marshal(map[string]any{"reason": "unmatched_prose_quote", "unmatched_quoted_fragments": missing, "allowed_from": m.From, "allowed_to": m.To})
+	return "上一候选已拒绝，未替换旧记录。请根据原始材料核对并修正以下问题，返回完整候选JSON：有原文依据的引文放入quotes并用{{q1}}等引用；概括用叙述表达，缺少依据的内容删除。保留已有约定id和有效来源，覆盖范围保持不变。\n" + string(data)
+}
+
 func ParseCandidate(raw string) (Candidate, error) {
 	text := strings.TrimSpace(raw)
 	if strings.HasPrefix(text, "```json\n") && strings.HasSuffix(text, "```") {
@@ -147,7 +206,11 @@ func Validate(c Candidate, m Material, finish string) (string, error) {
 		previous[a.ID] = a
 	}
 	seen := map[string]bool{}
-	body := strings.TrimSpace(c.Summary)
+	prose, err := renderQuoteReferences(strings.TrimSpace(c.Summary), c.Quotes)
+	if err != nil {
+		return "", err
+	}
+	body := prose
 	for _, a := range c.Agreements {
 		if a.ID == "" || seen[a.ID] || strings.TrimSpace(a.Text) == "" || len(a.Sources) == 0 {
 			return "", fmt.Errorf("invalid_agreement")
@@ -202,20 +265,9 @@ func Validate(c Candidate, m Material, finish string) (string, error) {
 		return "", fmt.Errorf("summary_too_long")
 	}
 	// Explicitly attributed quoted words in prose must also have a source.
-	quotes := regexp.MustCompile(`[“「"]([^”」"\n]{2,})[”」"]`).FindAllStringSubmatch(c.Summary, -1)
+	quotes := proseQuotes.FindAllStringSubmatch(prose, -1)
 	for _, q := range quotes {
-		found := strings.Contains(m.Previous.Body, q[1])
-		for _, t := range m.Past {
-			if strings.Contains(t.User, q[1]) {
-				found = true
-			}
-			for _, d := range t.Deliveries {
-				if d.State == "sent" && strings.Contains(d.Text, q[1]) {
-					found = true
-				}
-			}
-		}
-		if !found {
+		if !proseQuoteHasSource(q[1], m) {
 			return "", fmt.Errorf("unmatched_prose_quote")
 		}
 	}

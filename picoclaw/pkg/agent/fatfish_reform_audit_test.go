@@ -59,6 +59,24 @@ func TestFatfishReformPrivateInputAudit(t *testing.T) {
 	if _, err = m.sync(a, key, true); err != nil {
 		t.Fatal(err)
 	}
+	if os.Getenv("FATFISH_CONTEXT_AUDIT_SUMMARY_MATERIAL") == "1" {
+		material, e := m.material(key)
+		if e != nil {
+			t.Fatal(e)
+		}
+		raw, e := contextledger.ModelMaterialJSON(material)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if e = fileutil.WriteFileAtomic(filepath.Join(dir, "summary-material.json"), raw, 0o600); e != nil {
+			t.Fatal(e)
+		}
+		used, e := m.estimate(key)
+		if e != nil {
+			t.Fatal(e)
+		}
+		t.Logf("summary material full_input=%d high_water=40140 past=%d recent=%d from=%d to=%d verified_old_quotes=%d", used, len(material.Past), len(material.Recent), material.From, material.To, len(material.Previous.Quotes))
+	}
 	if os.Getenv("FATFISH_CONTEXT_AUDIT_PROTOCOL") == "1" {
 		projected, _, e := m.project(key)
 		if e != nil {
@@ -260,7 +278,7 @@ func TestFatfishReformRealProviderPositiveBatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	material := contextledger.Material{Previous: previous, Past: actual, From: 1, To: 1, MaxNumber: 1}
-	raw, _ := json.Marshal(material)
+	raw, _ := contextledger.ModelMaterialJSON(material)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	response, err := p.Chat(ctx, []providers.Message{{Role: "system", Content: fatfishSummaryPrompt}, {Role: "user", Content: string(raw)}}, nil, model, map[string]any{"max_tokens": 4096, "temperature": 0.2, "force_thinking_off": true, "thinking_level": "off"})

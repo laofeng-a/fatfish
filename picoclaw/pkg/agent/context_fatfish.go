@@ -351,6 +351,9 @@ func (m *fatfishHistoryManager) project(key string) ([]providers.Message, contex
 	if err != nil {
 		return nil, st, err
 	}
+	if st.Version == 0 && st.Body != "" {
+		st.Body = "[旧策略参考记录，尚未经新的摘要来源验收；内容依据较新的真实对话与当前人格、记忆正本校正。]\n" + st.Body
+	}
 	if st.Corrections != "" {
 		st.Body += "\n[另有已核对来源的约定更新，尚待合入摘要]\n" + st.Corrections
 	}

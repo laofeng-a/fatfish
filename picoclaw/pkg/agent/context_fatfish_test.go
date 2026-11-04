@@ -218,3 +218,109 @@ func TestFatfishReformBatchLeavesBufferAndStableDetailAfterRestart(t *testing.T)
 	}
 	t.Logf("full input before=%d after=%d high=40140 target<=31539 covered=%d version=%d", before, after, st.Covered, st.Version)
 }
+
+func TestFatfishReformBelowWaterlineDoesNotScheduleTinySummary(t *testing.T) {
+	m, a := reformFixture(t)
+	key := "small"
+	a.Sessions.AddFullMessage(key, providers.Message{Role: "user", Content: "一小段正常聊天", SourceKind: "human", SourceChatID: "123", SourceChannel: "telegram", SourceMessageID: "1"})
+	if _, err := m.sync(a, key, true); err != nil {
+		t.Fatal(err)
+	}
+	called := make(chan bool, 1)
+	a.Provider = &reformProvider{fn: func([]providers.Message) (*providers.LLMResponse, error) {
+		called <- true
+		return &providers.LLMResponse{FinishReason: "stop", Content: "unused"}, nil
+	}}
+	m.schedule(key)
+	m.mu.Lock()
+	running := len(m.running)
+	m.mu.Unlock()
+	if running != 0 {
+		t.Fatal("small conversation started a background summary")
+	}
+	select {
+	case <-called:
+		t.Fatal("provider was called below high water")
+	default:
+	}
+}
+
+func TestFatfishReformLegacyBodyIsLabeledWithoutChangingStoredVersion(t *testing.T) {
+	m, _ := reformFixture(t)
+	scope := contextledger.Scope{Session: "legacy", Chat: "123", Channel: "telegram"}
+	if err := m.store.Sync(scope, nil, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.store.SeedLegacy(scope, "旧策略留下的记录"); err != nil {
+		t.Fatal(err)
+	}
+	_, view, err := m.project(scope.Session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := m.store.State(scope.Session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(view.Body, "尚未经新的摘要来源验收") || stored.Body != "旧策略留下的记录" || stored.Version != 0 || stored.Covered != 0 {
+		t.Fatal("legacy source was promoted or altered", view, stored)
+	}
+}
+
+func TestFatfishReformQuoteRepairIsBoundedAndKeepsBothDrafts(t *testing.T) {
+	for _, succeeds := range []bool{true, false} {
+		t.Run(fmt.Sprintf("repair_success_%t", succeeds), func(t *testing.T) {
+			m, a := reformFixture(t)
+			m.keepRecent = 1
+			key := "repair"
+			for i := 1; i <= 3; i++ {
+				a.Sessions.AddFullMessage(key, providers.Message{Role: "user", Content: fmt.Sprintf("真实原话%d", i), SourceKind: "human", SourceChatID: "123", SourceChannel: "telegram", SourceMessageID: fmt.Sprint(i)})
+			}
+			if _, err := m.sync(a, key, true); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := m.store.DB.Exec("UPDATE context_turns SET kind='human' WHERE session=?", key); err != nil {
+				t.Fatal(err)
+			}
+			if err := m.store.SeedLegacy(contextledger.Scope{Session: key}, "旧摘要仍然保留"); err != nil {
+				t.Fatal(err)
+			}
+			before, _ := m.store.State(key)
+			rawCount := len(a.Sessions.GetHistory(key))
+			calls := 0
+			a.Provider = &reformProvider{fn: func(messages []providers.Message) (*providers.LLMResponse, error) {
+				calls++
+				var material contextledger.Material
+				if err := json.Unmarshal([]byte(messages[1].Content), &material); err != nil {
+					return nil, err
+				}
+				if calls == 2 && (len(messages) != 4 || !strings.Contains(messages[3].Content, "未记录的原话内容")) {
+					t.Fatal("repair did not receive the exact validation failure")
+				}
+				c := contextledger.Candidate{From: material.From, To: material.To, Summary: "jg说“未记录的原话内容”。"}
+				if calls == 2 && succeeds {
+					c.Summary = "jg说清了实际需要，随后双方接着交流。"
+				}
+				raw, _ := json.Marshal(c)
+				return &providers.LLMResponse{Content: string(raw), FinishReason: "stop"}, nil
+			}}
+			err := m.generate(context.Background(), key)
+			if (err == nil) != succeeds || calls != 2 {
+				t.Fatalf("result=%v provider_calls=%d", err, calls)
+			}
+			var total, rejected int
+			m.store.DB.QueryRow("SELECT count(*),sum(status='rejected') FROM context_summaries WHERE session=?", key).Scan(&total, &rejected)
+			if total != 2 || rejected < 1 {
+				t.Fatal("a draft or rejection was discarded", total, rejected)
+			}
+			after, _ := m.store.State(key)
+			if succeeds {
+				if after.Version == 0 || after.Covered <= before.Covered {
+					t.Fatal("valid repair did not activate")
+				}
+			} else if after.Body != before.Body || after.Version != before.Version || after.Covered != before.Covered || after.Cooldown < float64(time.Now().Add(9*time.Minute).Unix()) || len(a.Sessions.GetHistory(key)) != rawCount {
+				t.Fatal("failed repair changed the active source", after)
+			}
+		})
+	}
+}

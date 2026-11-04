@@ -98,6 +98,13 @@ func (m *fatfishHistoryManager) material(key string) (contextledger.Material, er
 		return contextledger.Material{}, fmt.Errorf("not_enough_complete_turns")
 	}
 	material := contextledger.Material{Previous: st, MaxNumber: last, Homes: map[string]string{}}
+	if st.Version == 0 && st.Body != "" {
+		headers, e := m.store.Headers(key)
+		if e != nil {
+			return material, e
+		}
+		material.Previous.Quotes = contextledger.LegacyQuoteEvidence(st.Body, headers, st.Covered)
+	}
 	_ = m.store.DB.QueryRow("SELECT reason FROM context_summaries WHERE session=? AND status='rejected' ORDER BY id DESC LIMIT 1", key).Scan(&material.Rejection)
 	root := filepath.Dir(os.Getenv("FATFISH_STRUCTURED_CORE_FILE"))
 	for _, name := range []string{"SOUL.md", "USER.md", "AGENT.md", "HEARTBEAT.md", "core.md", "MEMORY.md"} {
@@ -123,7 +130,7 @@ func (m *fatfishHistoryManager) material(key string) (contextledger.Material, er
 		material.Past = append(material.Past, t)
 		material.From = material.Past[0].Number
 		material.To = t.Number
-		raw, _ := json.Marshal(material)
+		raw, _ := contextledger.ModelMaterialJSON(material)
 		summaryInput := []providers.Message{{Role: "system", Content: fatfishSummaryPrompt}, {Role: "user", Content: string(raw)}}
 		n, _ := fatfishCountInput(summaryInput, nil)
 		if n > agent.ContextWindow-4096 {
@@ -144,24 +151,23 @@ func (m *fatfishHistoryManager) material(key string) (contextledger.Material, er
 	return material, nil
 }
 
-func (m *fatfishHistoryManager) generate(ctx context.Context, key string) error {
-	material, err := m.material(key)
-	if err != nil {
-		return err
-	}
+type fatfishSummaryAttempt struct {
+	Candidate         contextledger.Candidate
+	Raw, Body, Reason string
+	ID                int64
+	Accepted          bool
+	State             contextledger.State
+}
+
+func (m *fatfishHistoryManager) summaryAttempt(callCtx context.Context, key string, material contextledger.Material, messages []providers.Message) (fatfishSummaryAttempt, error) {
 	agent := m.al.agentForSession(key)
-	raw, err := json.Marshal(material)
-	if err != nil {
-		return err
-	}
-	callCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
 	m.al.activeRequestsInc()
-	response, callErr := agent.Provider.Chat(callCtx, []providers.Message{{Role: "system", Content: fatfishSummaryPrompt}, {Role: "user", Content: string(raw)}}, nil, agent.Model, map[string]any{"max_tokens": 4096, "temperature": 0.2, "thinking_level": "off", "force_thinking_off": true})
+	response, callErr := agent.Provider.Chat(callCtx, messages, nil, agent.Model, map[string]any{"max_tokens": 4096, "temperature": 0.2, "thinking_level": "off", "force_thinking_off": true})
 	m.al.activeRequestsDec()
 	var c contextledger.Candidate
 	var body, reason, generated string
 	accepted := false
+	var err error
 	if callErr != nil {
 		reason = "provider_error:" + fmt.Sprintf("%T", callErr)
 	} else if callCtx.Err() != nil {
@@ -183,25 +189,62 @@ func (m *fatfishHistoryManager) generate(ctx context.Context, key string) error 
 		}
 	}
 	if _, err = m.sync(agent, key, false); err != nil {
-		return err
+		return fatfishSummaryAttempt{}, err
 	}
 	id, err := m.store.RecordCandidate(key, material, c, generated, body, reason, accepted, m.cooldown)
 	if err != nil {
-		return err
+		return fatfishSummaryAttempt{}, err
 	}
 	if response != nil {
 		original, _ := json.Marshal(response)
 		if _, e := m.store.DB.Exec("UPDATE context_summaries SET response=? WHERE id=?", string(original), id); e != nil {
-			return e
+			return fatfishSummaryAttempt{}, e
 		}
 	}
 	st, err := m.store.State(key)
 	if err != nil {
+		return fatfishSummaryAttempt{}, err
+	}
+	return fatfishSummaryAttempt{Candidate: c, Raw: generated, Body: body, Reason: reason, ID: id, Accepted: accepted && st.Version == id, State: st}, nil
+}
+
+func (m *fatfishHistoryManager) generate(ctx context.Context, key string) error {
+	material, err := m.material(key)
+	if err != nil {
 		return err
 	}
-	if !accepted || st.Version != id {
-		return fmt.Errorf("candidate_rejected:%s", reason)
+	agent := m.al.agentForSession(key)
+	raw, err := contextledger.ModelMaterialJSON(material)
+	if err != nil {
+		return err
 	}
+	messages := []providers.Message{{Role: "system", Content: fatfishSummaryPrompt}, {Role: "user", Content: string(raw)}}
+	callCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	attempt, err := m.summaryAttempt(callCtx, key, material, messages)
+	if err != nil {
+		return err
+	}
+	// One targeted repair inside the same deadline. Save the rejected draft
+	// first, preserve independently grounded agreements, and yield to new input.
+	if !attempt.Accepted && attempt.Reason == "unmatched_prose_quote" && callCtx.Err() == nil && !m.humanBusy(key) && attempt.State.Version == material.Previous.Version && attempt.State.Covered == material.Previous.Covered && attempt.State.Revision == material.Previous.Revision {
+		material.Previous.Agreements = attempt.State.Agreements
+		raw, err = contextledger.ModelMaterialJSON(material)
+		if err != nil {
+			return err
+		}
+		repair := []providers.Message{{Role: "system", Content: fatfishSummaryPrompt}, {Role: "user", Content: string(raw)}, {Role: "assistant", Content: attempt.Raw}, {Role: "user", Content: contextledger.QuoteRepairInstruction(attempt.Candidate, material)}}
+		if tokens, _ := fatfishCountInput(repair, nil); tokens <= agent.ContextWindow-4096 {
+			attempt, err = m.summaryAttempt(callCtx, key, material, repair)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	if !attempt.Accepted {
+		return fmt.Errorf("candidate_rejected:%s", attempt.Reason)
+	}
+	st, id, body := attempt.State, attempt.ID, attempt.Body
 	// The accepted version and coverage are durable first. Source retirement is
 	// an optional, identity-checked space reclamation; assembly already uses the
 	// active SQLite version and therefore safely recovers a crash here.

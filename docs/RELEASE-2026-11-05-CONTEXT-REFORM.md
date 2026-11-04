@@ -1,5 +1,7 @@
 # 协作收口与上下文整理
 
+同日后续的摘要来源修复及正常水位真实回放结果，见 [摘要来源补充修复](RELEASE-2026-11-05-SUMMARY-SOURCES.md)。
+
 2026-11-05（UTC+08）部署。依据 `HANDOFF-CONTEXT-REFORM-20261104.md`，未切换模型、Seahorse 或向量服务。
 
 ## 协作任务

@@ -336,7 +336,7 @@ class CodexBridge:
         if self.final_seen(db,self.r.owner,chain['thread_id'],turn,status,text):return None
         event_id=secrets.token_hex(12)
         content=('Codex回合状态：'+status+'\n任务ID：'+str(chain['initial_job'])+'\nthread_id：'+chain['thread_id']+'\n回合ID：'+turn+'\n'
-            '按原目标处理结果：可推进就continue，完成就finish，确需jg提供信息时用wait_for_jg。'
+            '你负责将原目标推进到完成。复用已有结果和有效验证判断：达标就finish收口，有具体缺口才continue；新改动、新失败或关键证据不足时补充相称的验证。确需jg提供信息或决定目标变更时用wait_for_jg。'
             '向jg简短回报实质结果或阻断，细节按需展开。\n'
             'Codex回复：\n'+text)
         inserted=db.execute('INSERT OR IGNORE INTO codex_events(id,chain_id,job_id,turn_id,turn_status,content,status,created) VALUES(?,?,?,?,?,?,"pending",?)',
@@ -424,7 +424,7 @@ class CodexBridge:
                 db.execute('UPDATE codex_chains SET state="waiting_user",updated=? WHERE id=?',(time.time(),chain['id']))
                 if event:db.execute('UPDATE codex_events SET status="waiting_user" WHERE id=?',(event['id'],))
                 return {'state':'waiting_user','job_id':chain['initial_job']}
-            state=args.get('status')
+            state=args.get('status','completed')
             if state not in ('completed','failed','stopped'):raise ValueError('finish status must be completed, failed, or stopped')
             self._close_chain(db,chain['id'],state)
             return {'state':state,'job_id':chain['initial_job']}

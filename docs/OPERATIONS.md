@@ -24,7 +24,7 @@ Windows 连接器安装目录通常为 `%USERPROFILE%\.codex\fatfish-codex`。SS
 
 - MCP 工具发现开启，reader/deepseek 工具按需加载；BM25 与名称正则入口启用。
 - 短 AGENT 常驻，实际操作流程位于工作区 `guides/OPERATIONS.md`，需要时读取。
-- 上下文窗口于 2026-11-03 调为 131072，输出预留 8192；摘要比例阈值仍为 65%。
+- 上下文窗口于 2026-11-04 调为 65536，输出预留 8192；摘要比例阈值仍为 65%，历史摘要阈值42598，硬输入预算57344。
 - 周期安排、人格和长期记忆是实例私有状态，源码仓库不替代这些状态的备份。
 
 `server-setup/memory-reader.py` 的个人 Second Brain 地址已改为通过 `FATFISH_SECOND_BRAIN_ORIGIN` 配置；默认示例域名不可连接。对应 `settings.json` 中的 `origin` 应与配置地址一致。
@@ -56,7 +56,7 @@ Windows 连接器安装目录通常为 `%USERPROFILE%\.codex\fatfish-codex`。SS
 
 把 `config/my-todos.example.json` 的页面编号和凭据文件位置填入服务器 `/etc/picoclaw-memory/my-todos.json`，实际配置留在服务器。`notion_todos.py` 读取该页复选框，翻页并读取嵌套子任务，保留任务原话和来源链接。父子勾选状态各自判断。失败保留上次完整快照与成功时间，不把失败当作清空。
 
-`picoclaw-my-todos.timer` 每5分钟运行一次同步服务。快照在 `/var/lib/picoclaw-readers/context/my-todos.json`，由工具服务账号写、主服务账号读；目录组按实例配置并保留继承组权限。每轮jg私聊的动态上下文读取快照，群聊不注入。简表超过24KB时明确提示剩余数量，完整原文由 `my_todos` 读取。
+`picoclaw-my-todos.timer` 每5分钟运行一次同步服务。快照在 `/var/lib/picoclaw-readers/context/my-todos.json`，由工具服务账号写；目录组按实例配置并保留继承组权限。具体清单由 `my_todos` 按需一次读取，每轮只保留简短的工具入口提示。已读取的结果沿正常聊天历史保留，不再每轮从文件追加清单。
 
 四个入口注册在同一 MCP 工具服务，沿用按需发现：
 
@@ -79,7 +79,7 @@ systemctl status picoclaw-my-todos.timer
 
 日记工具只准备材料，正文由模型整理，保存仍用版本化 `memory_note_write`。其 `readback_verified=true` 已包含写后核对。Codex概览默认只读本地快照，不派发任务；额度与进展均按返回时间理解，不能把桥接请求的done当作任务完成。
 
-提示模板见 [COMMON-WORKFLOWS.md](../templates/COMMON-WORKFLOWS.md)，部署时合入最新 AGENT，详细流程合入工作区指南，不覆盖已有个人版本。真实验收与回滚见 [11 月 4 日发布记录](RELEASE-2026-11-04.md)。
+提示模板见 [COMMON-WORKFLOWS.md](../templates/COMMON-WORKFLOWS.md)，部署时合入最新 AGENT，详细流程合入工作区指南，不覆盖已有个人版本。当前按需读取与64K窗口的验收、回滚见 [最新发布记录](RELEASE-2026-11-04-ON-DEMAND-TODOS-64K.md)。
 
 ## 源码导入边界
 

@@ -18,7 +18,7 @@ def definition(name, description, properties=None):
 
 
 TOOLS = [
-    definition('my_todos', '读取jg的Notion待办快照。每轮“我的待办”已带简表；refresh=true立即同步，平时直接读本地。保留原话、子任务和来源，更新时间决定新鲜程度。仅jg私聊。',
+    definition('my_todos', '按需读取jg的Notion待办，一次返回完整本地快照、原话、子任务、来源和同步时间。讨论待办或安排时先检索；refresh=true立即同步Notion。仅jg私聊。',
                {'refresh': {'type': 'boolean'}}),
     definition('chat_recall', '一次搜索真实聊天、展开原文并补前后消息。找“以前聊过什么”优先用它；records带source_id、原文、时间和截断标记。query为空看近期，chat_id沿用history_find范围；更多原文仍可history_expand。',
                {'query': {'type': 'string'}, 'chat_id': {'type': 'string'},

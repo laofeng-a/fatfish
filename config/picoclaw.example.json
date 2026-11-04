@@ -5,7 +5,7 @@
       "workspace": "/var/lib/picoclaw/.picoclaw/workspace",
       "model_name": "fatfish",
       "max_tokens": 8192,
-      "context_window": 131072
+      "context_window": 65536
     }
   },
   "model_list": [

@@ -40,6 +40,8 @@ Windows 连接器安装目录通常为 `%USERPROFILE%\.codex\fatfish-codex`。SS
 
 人格写入沿用 `memory_note_read/write` 或 `MemoryNotes.write`，带最新 `expected_revision` 并读回。源码仓库的模板不覆盖线上后续修订。
 
+当前profile、core和MEMORY的正本为0660，profile/notes目录为02770；工具服务补充picoclaw组，使主服务与工具服务保存后都能继续读写。写入器保留这套共享权限；实际验收见[共享文件权限记录](RELEASE-2026-11-04-SHARED-PERMISSIONS.md)。
+
 延迟工具的schema TTL只控制本轮说明可见性。已知的精确注册名在TTL过期后仍可执行，沿用参数、allowlist及回合策略检查，不自动加载说明；故障诊断和实际读写回执见[人格与工具修复记录](RELEASE-2026-11-04-PROFILE-TOOLS.md)。
 
 回滚代码或配置时，保留上线后新增的聊天、任务和记忆数据；需要恢复数据库时另行明确恢复范围。

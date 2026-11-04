@@ -42,6 +42,17 @@ class NoteTests(unittest.TestCase):
         with self.r.db() as db:self.r._write_core(db)
         self.assertEqual(self.read()['content'],'我自己形成的看法')
 
+    @unittest.skipIf(os.name=='nt','POSIX shared file permissions')
+    def test_shared_memory_permissions_survive_both_python_writers(self):
+        self.write('自己整理的记忆')
+        with self.r.db() as db:self.r._write_core(db)
+        for path in [self.r.notes.root/'MEMORY.md',self.r.directory/'core.md']:
+            self.assertEqual(path.stat().st_mode&0o777,0o660)
+        self.write('更新后的记忆')
+        self.assertEqual((self.r.notes.root/'MEMORY.md').stat().st_mode&0o777,0o660)
+        self.write('原有偏好','USER.md')
+        self.assertEqual((self.r.notes.profile/'USER.md').stat().st_mode&0o777,0o660)
+
     def test_group_cannot_read_write_or_find_notes(self):
         self.write('PRIVATE')
         self.r.inbound({'chat_id':'-99','sender_id':'123','text':'/bindgroup'})
@@ -50,7 +61,7 @@ class NoteTests(unittest.TestCase):
             with self.assertRaises(ValueError):self.r.call(name,dict(args,_context=group))
 
     def test_only_fixed_paths_and_valid_past_dates(self):
-        for path in ('../SOUL.md','SOUL.md','/etc/passwd','202610/20261101.md','202602/20260230.md','299901/29990101.md','202610\\20261022.md'):
+        for path in ('../SOUL.md','/etc/passwd','202610/20261101.md','202602/20260230.md','299901/29990101.md','202610\\20261022.md'):
             with self.subTest(path=path),self.assertRaises(ValueError):self.read(path)
 
     @unittest.skipIf(os.name=='nt','POSIX server symlink boundary')

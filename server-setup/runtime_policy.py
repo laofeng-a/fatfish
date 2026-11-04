@@ -227,7 +227,7 @@ class Runtime:
         target=self.directory/'core.md';content='\n'.join('- '+c for c in reversed(core))[:6000]
         if not target.exists() or target.read_text(encoding='utf-8')!=content:
             pending=self.directory/'core.pending';pending.write_text(content,encoding='utf-8')
-            os.chmod(pending,0o640);os.replace(pending,target)
+            os.chmod(pending,0o660);os.replace(pending,target)
         if hasattr(self,'learning'):self.learning.export_corrections(db)
 
     def _allowed(self,db,chat):return chat==self.owner or chat in json.loads(self._get(db,'groups','[]'))

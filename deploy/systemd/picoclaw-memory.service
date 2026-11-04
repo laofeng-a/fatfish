@@ -10,6 +10,7 @@ EnvironmentFile=-/etc/picoclaw/private.env
 Type=notify
 User=picobudget
 Group=picobudget
+SupplementaryGroups=picoclaw
 ExecStart=/usr/bin/python3 /opt/picoclaw/fatfish-v1/memory-reader.py
 Environment=PYTHONDONTWRITEBYTECODE=1
 Restart=on-failure

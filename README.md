@@ -127,7 +127,7 @@ go build -tags goolm,stdjson -o ../build/picoclaw ./cmd/picoclaw
 
 这是从实际个人部署整理出的源码项目，并非一键安装的托管产品。部署前请阅读[维护说明](docs/OPERATIONS.md)，按自己的环境配置模型、Telegram、工具服务、Notion 和所需连接器；`config/` 与 `deploy/systemd/` 中的文件是起点，需要调整路径、服务账号和凭据位置。
 
-仓库中的 SOUL、USER 文件是通用模板。实际个人资料、聊天记录、记忆数据库、令牌及其他部署私有数据应由部署环境单独保存。具体验收范围见[最新发布记录](docs/RELEASE-2026-11-04-PROFILE-TOOLS.md)，不能由源码存在推断所有外部服务均已在其他环境中验证。
+仓库中的 SOUL、USER 文件是通用模板。实际个人资料、聊天记录、记忆数据库、令牌及其他部署私有数据应由部署环境单独保存。具体验收范围见[最新发布记录](docs/RELEASE-2026-11-04-SHARED-PERMISSIONS.md)，不能由源码存在推断所有外部服务均已在其他环境中验证。
 
 ## 致谢与许可
 

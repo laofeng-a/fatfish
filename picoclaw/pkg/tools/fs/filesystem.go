@@ -1033,9 +1033,13 @@ func (h *hostFs) WriteFile(path string, data []byte) error {
 		}
 		path = resolved
 	}
-	// Use unified atomic write utility with explicit sync for flash storage reliability.
-	// Using 0o600 (owner read/write only) for secure default permissions.
-	return fileutil.WriteFileAtomic(path, data, 0o600)
+	// Existing group-writable files are shared with another service. Keep their
+	// explicit access mode across atomic replacement; new/private files stay 0600.
+	perm := os.FileMode(0o600)
+	if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o020 != 0 {
+		perm = info.Mode().Perm()
+	}
+	return fileutil.WriteFileAtomic(path, data, perm)
 }
 
 func (h *hostFs) Open(path string) (fs.File, error) {

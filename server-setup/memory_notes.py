@@ -115,7 +115,7 @@ class MemoryNotes:
             try:
                 with os.fdopen(fd,'w',encoding='utf-8',newline='\n') as stream:
                     stream.write(content);stream.flush();os.fsync(stream.fileno())
-                os.chmod(temporary,0o640)
+                os.chmod(temporary,0o660 if name=='MEMORY.md' or name in PROFILE_FILES else 0o640)
                 new_revision=self.revision(content)
                 db.execute('INSERT INTO note_versions(path,previous_content,revision,new_revision,sources,context,created) VALUES(?,?,?,?,?,?,?)',
                     (name,old,revision,new_revision,json.dumps(sources),json.dumps({'chat':chat,'message_id':context.get('message_id'),'session_key':context.get('session_key')},ensure_ascii=False),time.time()))

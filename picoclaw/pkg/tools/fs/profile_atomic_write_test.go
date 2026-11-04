@@ -3,8 +3,49 @@ package fstools
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
+
+func TestHostAtomicWriteKeepsSharedMemoryWritableByBothServices(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shared file permissions")
+	}
+	root := t.TempDir()
+	t.Setenv("FATFISH_STRUCTURED_CORE_FILE", filepath.Join(root, "core.md"))
+	for _, tc := range []struct {
+		name string
+		mode os.FileMode
+	}{
+		{"core.md", 0o660},
+		{filepath.Join("notes", "MEMORY.md"), 0o660},
+		{filepath.Join("profile", "SOUL.md"), 0o660},
+		{filepath.Join("profile", "USER.md"), 0o660},
+		{filepath.Join("profile", "AGENT.md"), 0o660},
+		{filepath.Join("profile", "HEARTBEAT.md"), 0o660},
+		{"ordinary.md", 0o600},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			target := filepath.Join(root, tc.name)
+			if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(target, []byte("original"), tc.mode); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(target, tc.mode); err != nil {
+				t.Fatal(err)
+			}
+			if err := (&hostFs{}).WriteFile(target, []byte("shared memory")); err != nil {
+				t.Fatal(err)
+			}
+			info, err := os.Stat(target)
+			if err != nil || info.Mode().Perm() != tc.mode {
+				t.Fatalf("atomic write permissions: %v %v", info, err)
+			}
+		})
+	}
+}
 
 func TestHostAtomicWritePreservesProfileSymlink(t *testing.T) {
 	root := t.TempDir()

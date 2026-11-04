@@ -31,9 +31,17 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 		}); err == nil && resp != nil {
 			history = resp.History
 			summary = resp.Summary
+		} else if err != nil {
+			if _, ok := p.ContextManager.(*fatfishHistoryManager); ok {
+				return nil, err
+			}
 		}
 	}
-	ts.captureRestorePoint(history, summary)
+	if _, ok := p.ContextManager.(*fatfishHistoryManager); ok {
+		ts.captureRestorePoint(ts.agent.Sessions.GetHistory(ts.sessionKey), ts.agent.Sessions.GetSummary(ts.sessionKey))
+	} else {
+		ts.captureRestorePoint(history, summary)
+	}
 
 	contextualSkills := ts.activeSkills
 	if ts.agent.ContextBuilder != nil {
@@ -52,7 +60,17 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 
 	if !ts.opts.NoHistory {
 		toolDefs := filterToolsByTurnProfile(ts.agent.Tools.ToProviderDefs(), ts.profile)
-		if isOverContextBudget(ts.agent.ContextWindow, messages, toolDefs, ts.agent.MaxTokens) {
+		if manager, ok := p.ContextManager.(*fatfishHistoryManager); ok {
+			var err error
+			messages, err = manager.Admit(ctx, ts.sessionKey, messages, toolDefs, false)
+			if err != nil {
+				return nil, err
+			}
+			currentTurnStart = len(messages)
+			if strings.TrimSpace(ts.userMessage) != "" || len(ts.media) > 0 {
+				currentTurnStart--
+			}
+		} else if isOverContextBudget(ts.agent.ContextWindow, messages, toolDefs, ts.agent.MaxTokens) {
 			compressionBudget := ts.agent.ContextWindow
 			if fatfish.Enabled() {
 				compressionBudget -= EstimateMessageTokens(userPromptMessage(ts.userMessage, ts.media))
@@ -125,12 +143,8 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 	}
 
 	if !ts.opts.NoHistory && (strings.TrimSpace(ts.userMessage) != "" || len(ts.media) > 0) {
-		rootMsg := userPromptMessage(ts.userMessage, ts.media)
-		if len(rootMsg.Media) > 0 {
-			ts.agent.Sessions.AddFullMessage(ts.sessionKey, rootMsg)
-		} else {
-			ts.agent.Sessions.AddMessage(ts.sessionKey, rootMsg.Role, rootMsg.Content)
-		}
+		rootMsg := ts.historyUserOrigin(userPromptMessage(ts.userMessage, ts.media))
+		ts.agent.Sessions.AddFullMessage(ts.sessionKey, rootMsg)
 		ts.recordPersistedMessage(rootMsg)
 		ts.ingestMessage(ctx, p.al, rootMsg)
 	}

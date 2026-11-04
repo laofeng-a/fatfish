@@ -16,6 +16,7 @@ import sqlite3
 import ssl
 import socket
 import time
+import threading
 import uuid
 import urllib.error
 import urllib.parse
@@ -296,6 +297,22 @@ class Ledger:
         return True
 
 
+class BoundedModelServer(http.server.ThreadingHTTPServer):
+    """Allow a chat request alongside one background summary, with bounded RAM."""
+    daemon_threads=True
+    request_queue_size=8
+    def __init__(self,*args,**kwargs):
+        self.slots=threading.BoundedSemaphore(2)
+        super().__init__(*args,**kwargs)
+    def process_request(self,request,address):
+        self.slots.acquire()
+        try:super().process_request(request,address)
+        except Exception:self.slots.release();raise
+    def process_request_thread(self,request,address):
+        try:super().process_request_thread(request,address)
+        finally:self.slots.release()
+
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *args):
         return None
@@ -419,8 +436,9 @@ def serve(settings_path):
                 diagnostic('upstream_failed_reservation_unresolved' if upstream_attempted else 'gateway_failed',kind=type(exc).__name__,detail=str(exc))
                 self.send_json(502, {'error': {'message':'Model gateway request failed','type':'gateway_error','request_id':request_id}})
 
-    # Single process, one request at a time; SQLite transactions also protect restarts.
-    server = http.server.HTTPServer(('127.0.0.1', 18791), Handler)
+    # One process, at most two in-flight requests. Ledger transactions retain
+    # reservation ordering while a slow summary leaves capacity for chatting.
+    server = BoundedModelServer(('127.0.0.1', 18791), Handler)
     server.timeout = 100
     server.serve_forever()
 

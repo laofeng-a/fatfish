@@ -151,7 +151,7 @@ func (p *Provider) buildRequestBody(
 
 	requestBody := map[string]any{
 		"model":    model,
-		"messages": common.SerializeMessages(p.prepareMessagesForRequest(messages)),
+		"messages": common.SerializeMessages(p.prepareMessagesForTools(messages, len(tools) > 0)),
 	}
 
 	// When fallback uses a different provider (e.g. DeepSeek), that provider must not inject web_search_preview.
@@ -214,6 +214,14 @@ func (p *Provider) buildRequestBody(
 	// Merge extra body fields configured per-provider/model.
 	// These are injected last so they take precedence over defaults.
 	maps.Copy(requestBody, p.extraBody)
+	// Internal compaction calls must be able to disable thinking even when a
+	// model's extra_body enables it for ordinary conversation.
+	if force, _ := options["force_thinking_off"].(bool); force {
+		if p.SupportsThinking() {
+			delete(requestBody, "reasoning_effort")
+		}
+		p.applyThinkingControl(requestBody, model, map[string]any{"thinking_level": "off"})
+	}
 
 	return requestBody
 }
@@ -350,6 +358,22 @@ func (p *Provider) prepareMessagesForRequest(messages []Message) []Message {
 		return filterReasoningReplayMessages(messages)
 	}
 	return stripReasoningMessages(messages)
+}
+
+// DeepSeek's tools mode replays reasoning from every retained assistant turn,
+// including plain replies between tool rounds. Completed-history projections
+// keep that field once; a readable "思考" label cannot replace the wire field.
+func (p *Provider) prepareMessagesForTools(messages []Message, withTools bool) []Message {
+	if withTools && p.SupportsThinking() {
+		out := make([]Message, 0, len(messages))
+		for _, msg := range messages {
+			if !messageutil.IsTransientAssistantThoughtMessage(msg) && !assistantMessageEmpty(msg) {
+				out = append(out, msg)
+			}
+		}
+		return out
+	}
+	return p.prepareMessagesForRequest(messages)
 }
 
 func (p *Provider) requiresToolRoundReasoningReplay() bool {

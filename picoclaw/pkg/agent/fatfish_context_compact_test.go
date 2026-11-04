@@ -130,11 +130,19 @@ func TestFatfishEmergencySummarizesBeforeRetiringMinimalDialogue(t *testing.T) {
 	if !strings.Contains(p.input, "原话0") || !strings.HasPrefix(agent.Sessions.GetSummary("fixture-compact"), p.response) {
 		t.Fatal("semantic summary not retained")
 	}
-	if p.opts["thinking_level"] != "off" || p.opts["max_tokens"] != 2048 {
+	if p.opts["thinking_level"] != "off" || p.opts["force_thinking_off"] != true || p.opts["max_tokens"] != 2048 {
 		t.Fatal("summary is not lightweight")
 	}
 	if agent.Sessions.GetHistory("fixture-compact")[0].Content != "原话1：菜量小，想继续聊" {
 		t.Fatal("recent dialogue changed")
+	}
+}
+
+func TestFatfishRepeatedSummaryFailureDoesNotNestFallbackHeaders(t *testing.T) {
+	existing := summaryFallbackPrefix + "\n" + summaryFallbackPrefix + "\nuser: 之前的话"
+	summary := fatfishQuoteFallback(existing, []providers.Message{{Role: "user", Content: "新的话"}})
+	if strings.Count(summary, summaryFallbackPrefix) != 1 || !strings.Contains(summary, "之前的话") || !strings.Contains(summary, "新的话") {
+		t.Fatal(summary)
 	}
 }
 

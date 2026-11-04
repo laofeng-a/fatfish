@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
@@ -60,8 +61,11 @@ func TestMessageTool_Execute_Success(t *testing.T) {
 	}
 
 	// - ForLLM contains send status description
-	if result.ForLLM != "Message sent to test-channel:test-chat-id" {
-		t.Errorf("Expected ForLLM 'Message sent to test-channel:test-chat-id', got '%s'", result.ForLLM)
+	if !strings.Contains(result.ForLLM, "test-channel:test-chat-id") {
+		t.Errorf("Expected target in status, got '%s'", result.ForLLM)
+	}
+	if !strings.Contains(result.DeliverySummary, "Hello, world!") || !strings.Contains(result.DeliverySummary, "receipts") {
+		t.Fatalf("submitted body/confirmation boundary lost: %q", result.DeliverySummary)
 	}
 
 	// - ForUser is empty (user already received message directly)

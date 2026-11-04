@@ -98,6 +98,11 @@ func NewAgentLoop(
 	al.hooks = NewHookManager(al.runtimeEvents.Channel())
 	configureHookManagerFromConfig(al.hooks, cfg)
 	al.contextManager = al.resolveContextManager()
+	for _, id := range al.registry.ListAgentIDs() {
+		if agent, ok := al.registry.GetAgent(id); ok {
+			agent.ContextManager = al.contextManager
+		}
+	}
 
 	// Register shared tools to all agents (now that al is created)
 	registerSharedTools(al, cfg, msgBus, registry, provider)

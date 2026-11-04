@@ -122,8 +122,19 @@ func (p *Pipeline) CallLLM(
 		}
 	}
 
-	if fatfish.Enabled() {
+	_, usesNumberedHistory := p.ContextManager.(*fatfishHistoryManager)
+	if fatfish.Enabled() && !usesNumberedHistory {
 		exec.callMessages = foldFatfishToolResults(exec.callMessages)
+	}
+	if manager, ok := p.ContextManager.(*fatfishHistoryManager); ok && !ts.opts.NoHistory {
+		var err error
+		exec.callMessages, err = manager.Admit(turnCtx, ts.sessionKey, exec.callMessages, exec.providerToolDefs, true)
+		if err != nil {
+			return ControlBreak, err
+		}
+		if iteration == 1 {
+			manager.sample(ts, exec.callMessages, exec.providerToolDefs)
+		}
 	}
 	al.emitEvent(
 		runtimeevents.KindAgentLLMRequest,
@@ -349,6 +360,24 @@ func (p *Pipeline) CallLLM(
 		}
 
 		if isContextError && retry < maxRetries && !ts.opts.NoHistory {
+			if manager, ok := p.ContextManager.(*fatfishHistoryManager); ok {
+				// A provider may tokenize more strictly than our estimate. Retry
+				// only by dropping one whole completed view, preserving the exact
+				// current protocol and raw restore point. Never use legacy rebuild.
+				trimmed, number, removed := trimProjectedRecord(exec.callMessages)
+				if !removed {
+					err = fmt.Errorf("provider context limit exceeded; protected current tool chain retained: %w", err)
+					break
+				}
+				trimmed = withUncoveredNotice(trimmed, []int64{number})
+				var admitErr error
+				exec.callMessages, admitErr = manager.Admit(turnCtx, ts.sessionKey, trimmed, exec.providerToolDefs, true)
+				if admitErr != nil {
+					err = admitErr
+					break
+				}
+				continue
+			}
 			al.emitEvent(
 				runtimeevents.KindAgentLLMRetry,
 				ts.eventMeta("runTurn", "turn.llm.retry"),

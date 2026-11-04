@@ -228,6 +228,29 @@ func TestBuildRequestBody_DeepSeekExtraBodyStillOverridesThinkingFields(t *testi
 	}
 }
 
+func TestBuildRequestBody_CompactionDisablesConfiguredThinking(t *testing.T) {
+	p := NewProvider("key", "http://127.0.0.1:18791/v1", "", WithExtraBody(map[string]any{
+		"thinking": map[string]any{"type": "enabled"}, "reasoning_effort": "high",
+	}))
+	p.SetProviderName("deepseek")
+	options := map[string]any{"thinking_level": "off", "force_thinking_off": true}
+	body := p.buildRequestBody([]Message{{Role: "user", Content: "summarize"}}, nil, "deepseek-flash", options)
+	thinking, ok := body["thinking"].(map[string]any)
+	if !ok || thinking["type"] != "disabled" {
+		t.Fatalf("compaction thinking = %#v, want disabled", body["thinking"])
+	}
+	if _, ok := body["reasoning_effort"]; ok {
+		t.Fatal("compaction retained reasoning effort")
+	}
+	if _, ok := body["force_thinking_off"]; ok {
+		t.Fatal("internal option leaked into API request")
+	}
+	ordinary := p.buildRequestBody([]Message{{Role: "user", Content: "chat"}}, nil, "deepseek-flash", nil)
+	if ordinary["thinking"].(map[string]any)["type"] != "enabled" || ordinary["reasoning_effort"] != "high" {
+		t.Fatalf("ordinary chat changed: %#v", ordinary)
+	}
+}
+
 func TestBuildRequestBody_WarnsForUnsupportedDeepSeekAdaptiveThinkingLevel(t *testing.T) {
 	logFile := t.TempDir() + "/deepseek-adaptive-warning.log"
 	prevLevel := logger.GetLevel()

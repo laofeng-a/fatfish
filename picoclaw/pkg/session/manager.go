@@ -88,6 +88,7 @@ func (sm *SessionManager) AddFullMessage(sessionKey string, msg providers.Messag
 	if messageutil.IsTransientAssistantThoughtMessage(msg) {
 		return
 	}
+	msg = stampMessage(msg)
 
 	sm.mu.Lock()
 	defer sm.mu.Unlock()

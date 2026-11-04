@@ -23,6 +23,20 @@ func computeContextUsage(agent *AgentInstance, sessionKey string) *bus.ContextUs
 	if contextWindow <= 0 {
 		return nil
 	}
+	if manager, ok := agent.ContextManager.(*fatfishHistoryManager); ok {
+		used, blocks, _, err := manager.InputUsage(sessionKey)
+		if err == nil {
+			budget := contextWindow - agent.MaxTokens
+			percent := 0
+			if budget > 0 {
+				percent = used * 100 / budget
+			}
+			return &bus.ContextUsage{UsedTokens: used, TotalTokens: contextWindow, HistoryTokens: blocks["history"], CompressAtTokens: budget, SummarizeAtTokens: budget * 70 / 100, UsedPercent: min(100, percent)}
+		}
+		// An index/admission failure must not silently display the legacy count,
+		// which omits the private memory and uses a different history view.
+		return nil
+	}
 
 	// History tokens
 	history := agent.Sessions.GetHistory(sessionKey)

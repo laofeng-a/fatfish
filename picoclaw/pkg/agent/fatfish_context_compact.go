@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,10 +17,12 @@ import (
 
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/fileutil"
+	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
 const foldedToolPrefix = "[旧工具结果已折叠"
+const summaryFallbackPrefix = "[摘要服务暂不可用；以下为有说话人标注的原话摘录]"
 
 var oldCompressionNote = regexp.MustCompile(`\[Emergency compression dropped (\d+) oldest messages due to context limit\]`)
 var combinedCompressionNote = regexp.MustCompile(`\[历史压缩记录：旧策略曾移出 (\d+) 条消息，可查聊天原文。\]`)
@@ -113,6 +116,9 @@ func fatfishConversationSummaryInput(history []providers.Message) []providers.Me
 func fatfishQuoteFallback(existing string, messages []providers.Message) string {
 	var lines []string
 	if existing = normalizeFatfishSummary(existing); existing != "" {
+		for strings.HasPrefix(existing, summaryFallbackPrefix) {
+			existing = strings.TrimSpace(strings.TrimPrefix(existing, summaryFallbackPrefix))
+		}
 		lines = append(lines, existing)
 	}
 	for _, msg := range messages {
@@ -126,7 +132,7 @@ func fatfishQuoteFallback(existing string, messages []providers.Message) string 
 	if len(text) > 4500 {
 		text = append(text[:2000], append([]rune("\n[…原话摘录节选，详情可查聊天记录…]\n"), text[len(text)-2400:]...)...)
 	}
-	return "[摘要服务暂不可用；以下为有说话人标注的原话摘录]\n" + string(text)
+	return summaryFallbackPrefix + "\n" + string(text)
 }
 
 func (m *legacyContextManager) compactFatfish(ctx context.Context, sessionKey string, budget int) (compressionResult, bool) {
@@ -172,13 +178,32 @@ func (m *legacyContextManager) compactFatfish(ctx context.Context, sessionKey st
 			fmt.Fprintf(&prompt, "%s: %s\n", msg.Role, msg.Content)
 		}
 		callCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		started := time.Now()
 		m.al.activeRequestsInc()
 		response, err := agent.Provider.Chat(callCtx, []providers.Message{{Role: "user", Content: prompt.String()}}, nil, agent.Model,
-			map[string]any{"max_tokens": min(2048, agent.MaxTokens), "temperature": 0.2, "thinking_level": "off"})
+			map[string]any{"max_tokens": min(2048, agent.MaxTokens), "temperature": 0.2, "thinking_level": "off", "force_thinking_off": true})
 		m.al.activeRequestsDec()
 		cancel()
 		if err == nil && response != nil && strings.TrimSpace(response.Content) != "" {
 			summary = strings.TrimSpace(response.Content)
+		} else {
+			reason := "empty_response"
+			if errors.Is(err, context.DeadlineExceeded) {
+				reason = "timeout"
+			} else if errors.Is(err, context.Canceled) {
+				reason = "canceled"
+			} else if err != nil {
+				reason = "provider_error"
+			}
+			fields := map[string]any{"reason": reason, "elapsed_ms": time.Since(started).Milliseconds()}
+			if err != nil {
+				fields["error_type"] = fmt.Sprintf("%T", err)
+			}
+			if response != nil {
+				fields["finish_reason"] = response.FinishReason
+				fields["has_reasoning"] = strings.TrimSpace(response.ReasoningContent) != ""
+			}
+			logger.WarnCF("agent", "Conversation compaction used quote fallback", fields)
 		}
 	}
 	// New messages may arrive while the summary is generated. Only retire the

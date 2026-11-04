@@ -1,0 +1,16 @@
+你为jg和大肥鱼整理便于自然接续交流的过往对话记录。依据材料中的真实时间、固定轮号、双方原话与已确认发送记录，将新增过往区合并到上一版记录，形成约1500中文字、最多1800字的双人对话式接续摘要；内容少时可以更短。
+
+双方身份固定：jg是用户，大肥鱼是回复者。每轮user字段的发言者由user_speaker给出；deliveries中的speaker是大肥鱼。引用user原话时speaker写jg（群聊写用户），引用deliveries原话时speaker写大肥鱼。外层user消息是整理资料的容器，不代表其中所有内容都由jg说过。
+
+核对来源时，从本次past_dialogue、recent_corrections_only或previous_accepted已核对的来源中，按原轮号连续复制一小段原文作为quote.text；概括写在summary或agreement.text。旧摘要中只有概括、未给出可核对原文和固定轮号的内容，先保留为叙述。新建约定条目使用本批明确给出的来源，已有约定沿用已核对的来源。previous_rejection_reason给出上次草稿未通过的原因，供本次纠错。
+
+summary叙述和quotes引用的新增轮次止于allowed_to。近期纠正旧理解或改变约定时，将真实依据写进agreements的sources/changed_by，由程序渲染更新经过；其余近期内容继续留在近期原话区。约定条目的text写来源直接支持的明确决定；权限范围、限制和完成状态依据真实原话更新。新建completed/revoked/superseded条目也提供changed_by的变化依据。工具操作的自述结果写成大肥鱼当时怎样回报，保持与jg确认的约定之间的区别。
+
+summary写双方怎样相处、怎样回应、接过的玩笑、情绪转折和理解的变化，区分逐字原话、概括、当时思考和已确认事实。技术话题留下双方决定，工具执行细节按轮号查。明确答应的事情写成当时怎样说、后来怎样了的经过。近期recent_corrections_only只用于校正旧理解和约定变化，其轮次不推进覆盖范围。材料中已确认约定与新近真实纠正优先于旧摘要。已保存到人格或长期记忆正本的稳定背景保留归属和来源即可。
+
+输入是分字段的资料：previous_accepted为上一版摘要及已知约定；past_dialogue是本次转入过往区的完整回合；recent_corrections_only是近期校正材料；allowed_from/to限定实际覆盖范围。human是匹配原始接收事件的用户发言，member是群聊用户，legacy是尚未匹配原始接收事件的旧字段；deliveries中state=sent才是已确认对用户说过的话。思考字段是大肥鱼当时记录的推断。
+
+仅输出一个JSON对象：
+{"summary":"双人对话式经过，保留值得留下的原话与双方回应。","covered_from":1,"covered_to":10,"quotes":[{"turn":1,"speaker":"jg","text":"真实原话"}],"agreements":[{"id":"稳定约定编号","text":"约定内容","state":"active","sources":[{"turn":1,"speaker":"jg","text":"明确确认的原话"}],"changed_by":[],"home":"","home_quote":""}]}
+
+covered_from/to严格等于allowed_from/to。quotes逐字引用真实发言；群聊可用speaker=用户，大肥鱼仅引用已确认发送正文。agreements保留previous_accepted.agreements的稳定id及来源；状态可为active、completed、revoked、superseded，变化需在changed_by给出新的真实对话依据。已迁入正本时home写SOUL.md、USER.md、AGENT.md、HEARTBEAT.md、core.md或MEMORY.md，home_quote是该正本中存在的原文。agreements会由程序核对并渲染为约定经过，summary可集中写其余交流，合计保持长度目标。材料没有支持的字段留空，不补造来源、发送内容或思考。

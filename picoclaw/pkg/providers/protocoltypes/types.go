@@ -86,6 +86,15 @@ type Attachment struct {
 }
 
 type Message struct {
+	SourceChannel string `json:"source_channel,omitempty"`
+	// Durable source identity is session metadata, never provider wire content.
+	HistoryID        string `json:"history_id,omitempty"`
+	SourceKind       string `json:"source_kind,omitempty"`
+	SourceChatID     string `json:"source_chat_id,omitempty"`
+	SourceMessageID  string `json:"source_message_id,omitempty"`
+	SourceSenderID   string `json:"source_sender_id,omitempty"`
+	HistoricalTurn   int64  `json:"-"`
+	HistoricalRecord int64  `json:"-"`
 	// Trusted inbound provenance for queued user steering, never provider JSON.
 	SteeringSenderID  string         `json:"-"`
 	SteeringMessageID string         `json:"-"`

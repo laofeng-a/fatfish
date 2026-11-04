@@ -162,6 +162,10 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 			for i, pm := range pendingMessages {
 				if fatfish.Enabled() && ts.channel == "telegram" {
 					ts.adoptSteeringSource(pm)
+					pm = ts.historyUserOrigin(pm)
+					if pm.SteeringMessageID == "" {
+						pm.SourceKind = "continuation"
+					}
 					if pm.SteeringMessageID != "" {
 						toolshared.BeginReplyDeliveryMessage(turnCtx, pm.SteeringMessageID)
 					}

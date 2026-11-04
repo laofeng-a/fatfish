@@ -35,6 +35,7 @@ from tool_efficiency import sent_media
 from common_workflows import CommonWorkflows, TOOLS as COMMON_WORKFLOW_TOOLS, NAMES as COMMON_WORKFLOW_NAMES
 from memory_recall import MemoryRecall,normalized
 from memory_learning import MemoryLearning
+from turn_history import TurnHistory
 from exploration_opportunities import ExplorationOpportunities
 
 class TelegramRejected(ValueError):
@@ -121,6 +122,7 @@ TOOLS=[
  tool('memory_save','留下值得记住的事实、看法和小插曲，带真实source_id与quote。交流余味用interaction，想聊的阅读素材用topic并留视频编号或链接；模型自己选择。importance影响事件召回排序，expires_days设临时有效期；表达经验用interaction记录情境与习惯；replace_id将旧说法归档并联动引用。同内容再次保存会强化；topic_state可标queued/shared/closed。',{'category':{'type':'string','enum':['core','interaction','inference','opinion','topic']},'content':TEXT,'source_id':{'type':'integer','minimum':1},'quote':TEXT,'replace_id':{'type':'integer','minimum':1},'expires_days':{'type':'integer','minimum':1,'maximum':365},'importance':{'type':'number','minimum':0,'maximum':1},'topic_state':{'type':'string','enum':['queued','shared','closed']}},['category','content','source_id','quote'],False),
  tool('memory_find','按相关性找记忆、来源和阅读素材；事件用鲜活度辅助排序，明确的旧事仍能找回。空query浏览，category=topic、topic_state=queued找想聊但未分享的内容，interaction找交流片段。用自己的话自然接，不必复述检索分数。',{'query':TEXT,'category':{'type':'string','enum':['all','core','interaction','inference','opinion','topic']},'topic_state':{'type':'string','enum':['all','queued','shared','closed']},'limit':{'type':'integer','minimum':1,'maximum':50}},[]),
  tool('memory_note_read','读取MEMORY.md、YYYYMM/YYYYMMDD.md日记、USER.md、HEARTBEAT.md、AGENT.md或SOUL.md；index列目录，version取旧版。返回正文、revision和版本记录。',{'path':TEXT,'version':{'type':'integer','minimum':1}}),
+ tool('turn_detail','按固定轮号读取真实对话详情；number就是历史标题中的轮号。part选择all、dialogue、tools或reasoning，offset/limit分页取完整原文。默认当前会话；chat_id沿用登记会话权限，内部来源可用record_id。',{'number':{'type':'integer','minimum':1},'record_id':{'type':'integer','minimum':1},'part':{'type':'string','enum':['all','dialogue','tools','reasoning']},'offset':{'type':'integer','minimum':0},'limit':{'type':'integer','minimum':1,'maximum':12000},'chat_id':CHAT_TARGET,'session_key':TEXT}),
  tool('memory_note_write','整理自己的文字记忆、日记、USER.md、HEARTBEAT.md、AGENT.md与SOUL.md。先读最新revision，再提交完整content与expected_revision；source_ids记录真实来源，自动保存旧版本。',{'path':TEXT,'content':TEXT,'expected_revision':TEXT,'source_ids':{'type':'array','items':{'type':'integer','minimum':1},'maxItems':8}},['path','content','expected_revision'],False),
  tool('image_read','读取X或B站配图URL，返回实际图像。',{'url':TEXT},['url']),
 ]
@@ -186,6 +188,7 @@ class Runtime:
                 db.execute('ALTER TABLE wakes ADD COLUMN heartbeat_at REAL')
         self.platform_consent=PlatformConsent(self)
         self.notes=MemoryNotes(self)
+        self.turn_history=TurnHistory(self)
         self.emotes=EmoteLibrary(self)
         self.reminders=Reminders(self)
         self.bot_dialogue=GroupBotDialogue(self)
@@ -631,6 +634,7 @@ class Runtime:
                 groups=json.loads(self._get(db,'groups','[]'));titles=json.loads(self._get(db,'group_titles','{}'))
             return {'current_chat_id':chat,'chats':[{'chat_id':self.owner,'type':'private','title':'与jg私聊'}]+[{'chat_id':group,'type':'group','title':titles.get(group,'已登记群 '+group)} for group in groups]}
         if name=='memory_note_read':return self.notes.read(args.get('path','MEMORY.md'),args.get('version'))
+        if name=='turn_detail':return self.turn_history.read(args,context,chat)
         if name=='memory_note_write':return self.notes.write(args,context,chat)
         if name=='emote_find':
             if args.get('inbox'):

@@ -37,6 +37,7 @@ type AgentInstance struct {
 	Provider                  providers.LLMProvider
 	Sessions                  session.SessionStore
 	ContextBuilder            *ContextBuilder
+	ContextManager            ContextManager
 	Tools                     *tools.ToolRegistry
 	Definition                AgentContextDefinition
 	Subagents                 *config.SubagentsConfig

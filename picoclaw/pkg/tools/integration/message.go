@@ -239,8 +239,9 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	}
 
 	return &ToolResult{
-		ForLLM: status,
-		Silent: true,
+		ForLLM:          status,
+		Silent:          true,
+		DeliverySummary: "Message channel callback accepted the following content; actual delivery is determined by channel receipts:\n" + content,
 	}
 }
 

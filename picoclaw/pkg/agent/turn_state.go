@@ -674,6 +674,15 @@ func (ts *turnState) captureRestorePoint(history []providers.Message, summary st
 }
 
 func (ts *turnState) recordPersistedMessage(msg providers.Message) {
+	if ts.agent != nil && ts.agent.Sessions != nil {
+		history := ts.agent.Sessions.GetHistory(ts.sessionKey)
+		if len(history) > 0 {
+			last := history[len(history)-1]
+			if last.Role == msg.Role && last.Content == msg.Content && last.ToolCallID == msg.ToolCallID {
+				msg = last
+			}
+		}
+	}
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	ts.persistedMessages = append(ts.persistedMessages, msg)

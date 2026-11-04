@@ -369,6 +369,9 @@ func (al *AgentLoop) Close() {
 	}
 
 	al.GetRegistry().Close()
+	if closer, ok := al.contextManager.(interface{ Close() error }); ok {
+		_ = closer.Close()
+	}
 	if al.hooks != nil {
 		al.hooks.Close()
 	}

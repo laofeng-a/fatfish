@@ -233,8 +233,23 @@ func (r *ToolRegistry) Get(name string) (Tool, bool) {
 	if !ok {
 		return nil, false
 	}
-	// Hidden tools with expired TTL are not callable.
+	// Get follows schema visibility. Deferred tools may still be executed by
+	// their registered name through ExecuteWithContext after this TTL expires.
 	if !entry.IsCore && entry.TTL <= 0 {
+		return nil, false
+	}
+	return entry.Tool, true
+}
+
+// A deferred schema is a context optimization, not an execution permission.
+// Models can retain a tool name in conversation history after its schema TTL
+// expires. Resolve that exact registered name while preserving agent allowlists;
+// turn-profile and hook checks still run before ExecuteWithContext is reached.
+func (r *ToolRegistry) getForExecution(name string) (Tool, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	entry, ok := r.tools[name]
+	if !ok || !r.toolAllowedLocked(name) {
 		return nil, false
 	}
 	return entry.Tool, true
@@ -261,7 +276,7 @@ func (r *ToolRegistry) ExecuteWithContext(
 			"args": args,
 		})
 
-	tool, ok := r.Get(name)
+	tool, ok := r.getForExecution(name)
 	if !ok {
 		logger.ErrorCF("tool", "Tool not found",
 			map[string]any{

@@ -48,18 +48,24 @@
 
 部署时旧日记哈希完整核对。随后今天日记由正常活动更新，旧内容完整保留在 note_versions 158；更早日记未变化。没有二次语义压缩、正文迁库或新增多级索引。
 
-可复用验收命令（独立临时目录；不触发 Telegram 发送）：
+可复用验收命令（仓库副本；不触发 Telegram 发送）：
 
 ```sh
-cd /var/tmp/fatfish-agent-loops-diary-20261105
-python3 test-agent-loops.py
-python3 test-pulse-policy.py
-python3 test-tool-efficiency.py
+python3 server-setup/test-agent-loops.py
+python3 server-setup/test-pulse-policy.py
+python3 server-setup/test-tool-efficiency.py
+```
+
+服务器健康检查：
+
+```sh
 curl -fsS http://127.0.0.1:18790/health
 curl -fsS http://127.0.0.1:18790/ready
 ```
 
 日记边界、原断言对照和私有真实回放已经留下日志，达标后不反复对线上会话重做验收。
+
+交付后的中间文件清理：服务器本次上传包、临时模块副本及私有验收沙箱已删除；原有验收日志、真实材料回放输入和实际组装请求归档在仓库外私有证据目录。部署前备份、原始线上记录及回滚脚本继续保留。本地构建二进制和分片的删除被执行策略拦截，已按用户要求集中到仓库外 `server-setup/state/待删除-大肥鱼中间文件-20261105/`，供用户整目录删除；共 332701673 字节，附逐项清单。源码原始快照另有经过校验的无损压缩备份。
 
 ## 部署与回滚
 

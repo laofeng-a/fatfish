@@ -18,7 +18,9 @@ flowchart LR
     MCP <--> Jobs[Persistent Jobs and Receipts]
     Jobs <--> Bridge[Windows Desktop Connectors]
     Bridge <--> Agents[Codex / DSH / Claude Code]
-    Timer[Heartbeat / Silent Alarms] --> Gateway
+    Timer[Heartbeat / Due Events] --> Loops[Task Patrol / Quota Watch / Autonomous Activity]
+    Loops <--> Jobs
+    Loops -->|Context and Provenance| Gateway
 ```
 
 The Go process handles messaging, context assembly, model calls, and tool orchestration. The Python service provides memory, tasks, content reading, and collaboration interfaces. The server handles lightweight coordination and storage; desktop connectors reuse the computer's project environments and coding tools. Models run through APIs. Desktop-dependent tools require the relevant connector to be online.
@@ -30,14 +32,25 @@ The Go process handles messaging, context assembly, model calls, and tool orches
 Long conversations accumulate dialogue, tool JSON, transcripts, and execution logs. Fatfish separates **stored source records** from **the context view sent to the model**:
 
 - Fold large, already-consumed tool outputs into short previews, result states, and retrieval references such as `record_id / source_id / job_id`. Keep the current unread tool batch intact.
-- When dialogue must be compacted, first produce a continuation summary covering responses, jokes, corrections, and unfinished topics; archive the source messages before retiring active history. If summarization fails, retain attributed excerpts.
+- Store attributed dialogue, confirmed deliveries, reasoning, and tool details under stable turn numbers, separately from the model's input view. Summary material omits execution logs and internal reasoning while retaining tool reads of actual conversations and diaries as labeled sources.
+- Generate a candidate summary, then validate speakers, turn numbers, exact quotations, coverage, and protected agreements. Rendered prose plus separate agreements must fit within **1,800 characters**, without a target length. Activate the new version and advance coverage only after acceptance; rejection retains the previous version, source records, and reason. Stale inputs cannot overwrite newer state.
 - Separate persistent context by responsibility: SOUL describes expression and interaction, USER holds lasting preferences, AGENT holds general principles, and HEARTBEAT supports background scenarios. Retrieve specific experiences from chat, diaries, and reading records.
 - Keep sources, timestamps, expiry, and replacement relationships with memories. Corrections make old records historical and provide updated facts alongside relevant summaries; background maintenance handles related free-text references.
 - Maintain one canonical set of profile files. Writes require `expected_revision`, retain earlier versions, and verify the saved content by reading it back, reducing conflicting updates between the assistant and maintenance code.
 
+Three kinds of records serve distinct purposes:
+
+| Record | Contents | How it reaches the model |
+|---|---|---|
+| Chat summary | Responses, shared jokes, feelings, clarified misunderstandings, and important agreements | A continuation view of earlier dialogue; exact quotations remain traceable to original turns |
+| Diary | Richer dated experiences, reactions, reflections, and interaction details; **18,000 bytes** per entry across writes, reads, and search reads | Each turn lists only existing paths for today and the previous two days; `memory_find` retrieves matches and `memory_note_read` expands entries. Older diaries remain searchable |
+| Task record | Goals, current agreements, progress, operations, executor IDs, receipts, and acceptance evidence | Injected into the corresponding task's execution context |
+
+Technical topics in summaries and diaries retain the user's ideas, choices, and the course of the conversation; file lists, deployment steps, and test data belong in task records. MEMORY and profile files retain their separate size limits.
+
 This trades storage and retrieval work for conversational continuity. An archived source is not necessarily visible to the model in the current turn, and summaries can still lose detail.
 
-Implementation: [context folding and archival](picoclaw/pkg/agent/fatfish_context_compact.go), [memory context and corrections](picoclaw/pkg/agent/fatfish_memory.go), [versioned file writes](server-setup/memory_notes.py), and [incremental memory maintenance](server-setup/memory_learning.py).
+Implementation: [turn storage, material projection, and summary acceptance](picoclaw/pkg/contextledger/), [summary prompt](picoclaw/pkg/agent/fatfish_summary_prompt.txt), [context assembly](picoclaw/pkg/agent/context_fatfish.go), [tool-output folding](picoclaw/pkg/agent/fatfish_context_compact.go), [memory corrections](picoclaw/pkg/agent/fatfish_memory.go), [versioned file writes](server-setup/memory_notes.py), and [diary maintenance](server-setup/diary_maintenance.py).
 
 ### 2. Cross-machine collaboration: distinguish requests, chats, and execution
 
@@ -47,18 +60,37 @@ The Telegram assistant and desktop coding tools communicate through persistent q
 - Existing Codex desktop chats are automatically registered for native sharing. Messages enter the original owner's chat queue, preserving desktop execution ownership and avoiding competing writers. Connector-created independent tasks keep their own execution path.
 - Native queue submissions use stable message identifiers and check for existing entries before enqueueing. Task completion is confirmed against actual turns and completion receipts. Query results and completion events share consumption records to reduce duplicate wakeups.
 - DSH and Claude Code have separate adapters, with their own session, continuation, and receipt semantics.
+- A shared registration and dispatch entry associates `task_id` with complete `thread_id / job_id / turn_id` receipts. Initiation, slow-query results, and completion callbacks resume the stable task context. Existing pending instructions are reused rather than submitting another continuation on every patrol.
 
 Connectors add online dependencies and state management, while preserving real desktop project environments and chat context. Uncertain states remain inspectable rather than being reported as completed tasks.
 
 Implementation: [server collaboration queue](server-setup/codex_bridge.py), [native Codex routing](codex-control/worker.py), [DSH connector](codex-control/dsh_connector.py), and [Claude Code connector](codex-control/claude_connector.py).
 
-### 3. Scheduling and delivery: prioritize people, keep internal results quiet
+### 3. Two wakeup classes: continuous tasks and revocable autonomous activity
+
+The existing heartbeat lease and scheduling mechanisms serve three distinct persistent workflows:
+
+| Workflow | Scheduling and context | Closing or cancelling |
+|---|---|---|
+| Task patrol | Every **25 minutes**, resume `agent:task-<task_id>` with the latest original goal, source, completion criteria, agreements, progress, and receipts | Record minor leftovers and `finish` when the practical goal is met. Cancelling patrol stops monitoring; stopping execution follows the task instruction |
+| Quota watch | Use the executor's actual quota reset time; coalesce schedules for the same provider and window, then resume the original task | Independent of patrol; finishing one task does not disable the watcher |
+| Autonomous activity | An adjustable default of about **15 minutes**, with relationship context, recent conversation, and a small continuation note | A quiet turn retains a future opportunity; after the user disables activity, only the user can re-enable it |
+
+Task goals and effective agreements have sources and versions. Updates affect the corresponding task while earlier instructions remain in history. **Every model call reloads the current task record and canonical SOUL, core, and AGENT execution rules**, without automatically importing unrelated conversation summaries. An audit of the assembled request checks the task ID, version, and content, rather than merely checking stored files.
+
+Autonomous activity and its derived alarms, cron jobs, queued wakeups, and callbacks carry a source epoch. Disabling it cancels pending schedules and stops new actions at the next model-call or individual tool boundary. Late receipts are preserved but cannot restart the disabled activity or send messages. Ordinary chat, independent reminders, and user-assigned tasks retain their own lifecycles. **Already-dispatched autonomous executor jobs keep running**; disabling activity does not send a stop command to Codex or other executors.
+
+Task reporting has independent global and per-task switches, enabled by default. Explicit reports may describe blockers, decisions, or completion; disabling reports still allows progress and internal records. Contacting the user and retaining the next wakeup are separate decisions.
+
+Implementation: [task versions, provenance, and wakeup state](server-setup/agent_loops.py), [per-call context assembly and audit](picoclaw/pkg/agent/fatfish_loops.go), [cron provenance and cancellation](picoclaw/pkg/tools/fatfish_loop_cron.go), and [runtime tools and receipt routing](server-setup/runtime_policy.py).
+
+### 4. Scheduling and delivery: prioritize people, keep internal results quiet
 
 Programmatic checks, model wakeups, and user-visible messages are separate operations. Timers provide opportunities to act, completion events provide reasons to continue, and the model decides what to do or share.
 
 - Background events wait while a human turn is active. Background work can save a checkpoint and yield between model or tool batches when a human message arrives, then continue later. Already-dispatched mutations retain their actual receipts.
 - Programs wait for slow queries and wake the model when results arrive, reducing repeated model-driven status checks.
-- Automatic final text from heartbeats, silent alarms, and collaboration callbacks stays internal by default. Proactive sharing uses explicit sending tools; control markers and internal receipts stay separate from chat text.
+- Automatic final text from tasks, autonomous activity, heartbeats, and collaboration callbacks stays internal. Contacting the user requires an explicit sending tool; an internal conclusion such as “did not disturb the user” is not automatically posted. Independent reminders retain their normal delivery behavior.
 - Delivery accounting uses actual message IDs and per-part receipts. `unknown` means delivery is unconfirmed and does not justify blind retries. Deduplication uses job, event, and message identities while preserving genuine new progress.
 
 Yielding is cooperative at safe boundaries, and cross-platform delivery is not claimed to provide strict end-to-end exactly-once semantics. Explicit states keep completed actions traceable after failures.
@@ -79,12 +111,13 @@ Implementation: [model gateway](server-setup/budget-gateway.py), [tool caching a
 
 - **Telegram interaction:** Private and group conversations, text and media delivery, quoted replies, and status checks based on local receive and delivery records.
 - **Conversation context and memory:** Combines session history, summaries of earlier conversations, and long-term memory. Supports history compaction and archival of source messages. `chat_recall` retrieves matching messages, surrounding context, and source IDs in one call.
-- **Notion tasks:** Synchronizes checkboxes and nested tasks from a configured Notion page in the background, then adds a compact list of incomplete items to the owner's private-chat context. Sync timestamps and manual refresh are available.
+- **Notion tasks:** Synchronizes checkboxes and nested tasks from a configured Notion page in the background. `my_todos` reads the complete list on demand; sync timestamps and manual refresh are available.
 - **Diary preparation:** `diary_prepare` gathers source conversations, reading records, the existing diary, and its revision for a chosen date. The model writes the entry, which is saved through the versioned memory interface.
 - **Coding-agent collaboration:** Connects to Codex, DSH, and Claude Code sessions. `codex_overview` brings together connection state, progress snapshots, request receipts, and the latest cached quota information.
 - **Content and media:** Provides reading integrations for X, Bilibili, and Douyin. Telegram emotes are sent as stickers, photos, or animations according to type; local emote selection, delivery, and accounting can run in one call.
 - **On-demand tools:** MCP tools can be discovered by search before their definitions are loaded. The tool service can also batch independent reads.
 - **Reminders and background maintenance:** Supports reminders, silent alarms, and diary maintenance; actual behavior depends on deployment configuration and runtime state.
+- **Tasks and autonomous activity:** `task_loop` registers, dispatches, updates, reports, and closes tasks; `quota_wait` watches actual reset times; `autonomy` inspects activity, adjusts intervals, and manages its switch.
 
 External integrations depend on account permissions, APIs, and the content being accessed. For example, subtitles or transcripts are not available for every video, and coding-agent collaboration requires the relevant connector to be online.
 
@@ -111,6 +144,8 @@ Run the relevant Python checks from the repository root:
 ```sh
 python3 server-setup/test-common-workflows.py
 python3 server-setup/test-tool-efficiency.py
+python3 server-setup/test-agent-loops.py
+python3 server-setup/test-pulse-policy.py
 python3 workspace-tools/test_emotes.py
 ```
 
@@ -119,6 +154,8 @@ Build the Go gateway and run the Fatfish checks:
 ```sh
 cd picoclaw
 go test -tags goolm,stdjson ./pkg/agent -run TestFatfish -count=1
+go test -tags goolm,stdjson ./pkg/contextledger -count=1
+go test -tags goolm,stdjson ./pkg/tools -run 'Test.*(Fatfish|Cron)' -count=1
 mkdir -p ../build
 go build -tags goolm,stdjson -o ../build/picoclaw ./cmd/picoclaw
 ```
@@ -127,7 +164,7 @@ go build -tags goolm,stdjson -o ../build/picoclaw ./cmd/picoclaw
 
 This repository was extracted from a working personal deployment; it is not a one-click hosted product. Start with the [operations guide](docs/OPERATIONS.md), then configure the model, Telegram, tool service, Notion, and connectors for your own environment. Files under `config/` and `deploy/systemd/` are starting points: paths, service accounts, and credential locations need to be adapted. The operations and release notes are primarily in Chinese.
 
-The SOUL and USER files in the repository are generic templates. Actual personal profiles, chat history, memory databases, tokens, and other deployment-private data belong in the deployment environment. See the [release verification record](docs/RELEASE-2026-11-04.md) for the scope of completed checks; source code alone does not establish that every external integration has been verified in another environment.
+The SOUL and USER files in the repository are generic templates. Actual personal profiles, chat history, memory databases, tokens, and other deployment-private data belong in the deployment environment. Deploy only the required modules and use revision-based profile writes; rollback checks versions and retains data created after deployment. See the [diary and wakeup release record](docs/RELEASE-2026-11-05-DIARY-AGENT-LOOPS.md) for evidence and rollback steps, and the [summary source-validation record](docs/RELEASE-2026-11-05-SUMMARY-SOURCES.md) for summary acceptance and history retention. Source code alone does not establish that every external integration has been verified in another environment.
 
 ## Attribution and license
 

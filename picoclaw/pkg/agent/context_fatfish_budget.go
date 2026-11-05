@@ -31,7 +31,7 @@ func fatfishCountInput(messages []providers.Message, defs []providers.ToolDefini
 	}
 	now := time.Now().In(time.FixedZone("UTC+8", 8*3600))
 	weekday := []string{"日", "一", "二", "三", "四", "五", "六"}[int(now.Weekday())]
-	clock := "[fatfish_runtime_clock]\n当前日期时间：" + now.Format("2006-01-02T15:04:05Z07:00") + "（星期" + weekday + "）\n时区：UTC+08:00，jg当地时间。每次模型调用前刷新，今天、明天、昨天按此理解。\n[/fatfish_runtime_clock]"
+	clock := "[fatfish_runtime_clock]\n当前日期时间：" + now.Format("2006-01-02T15:04:05Z07:00") + "（星期" + weekday + "）\n时区：UTC+08:00，jg当地时间。每次模型调用前刷新，今天、明天、昨天按此理解。\n用途：时间附注，用于理解日期、时刻与相对时间；本轮处理事项依据真实消息及事件来源。\n[/fatfish_runtime_clock]"
 	blocks["clock"] = EstimateMessageTokens(providers.Message{Role: "system", Content: clock})
 	total := 0
 	for _, n := range blocks {

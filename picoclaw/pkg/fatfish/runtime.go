@@ -26,6 +26,7 @@ type Decision struct {
 	Reply      string      `json:"reply"`
 	Context    string      `json:"context"`
 	WakeID     string      `json:"wake_id"`
+	WakeKind   string      `json:"wake_kind"`
 	Silent     bool        `json:"silent"`
 	Ticket     string      `json:"ticket"`
 	Skip       bool        `json:"skip"`

@@ -49,9 +49,11 @@ func prepareFatfishLoopRequest(ctx context.Context, ts *turnState, exec *turnExe
 		if strings.HasPrefix(ts.sessionKey, "agent:task-") || strings.HasPrefix(ts.sessionKey, "agent:autonomy-") {
 			return err
 		}
+		exec.callMessages = withFatfishTurnEvent(ts, exec.callMessages, "")
 		return nil
 	}
 	if !state.Managed {
+		exec.callMessages = withFatfishTurnEvent(ts, exec.callMessages, state.WakeKind)
 		return nil
 	}
 	if !state.Active {
@@ -83,6 +85,7 @@ func prepareFatfishLoopRequest(ctx context.Context, ts *turnState, exec *turnExe
 		}
 		exec.callMessages = loopTaskMessages(messages, canonical.String(), state.Context)
 	}
+	exec.callMessages = withFatfishTurnEvent(ts, exec.callMessages, state.WakeKind)
 	return nil
 }
 

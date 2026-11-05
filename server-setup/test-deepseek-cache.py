@@ -52,6 +52,17 @@ class CacheTests(unittest.TestCase):
         self.assertEqual(len(once['messages']),len(twice['messages']))
         self.assertEqual(json.dumps(twice).count('[fatfish_runtime_clock]'),1)
 
+    def test_event_identity_and_short_human_message_survive_clock_refresh(self):
+        for text in ('哔哔哔','？'):
+            data=self.request();data['messages'][-1]['content']=text
+            event={'role':'system','content':'[fatfish_turn_event]\n{"kind":"human_message","message_id":"5622"}\n[/fatfish_turn_event]'}
+            data['messages'].append(event)
+            result=g.refresh_runtime_clock(data,tail_context=True)
+            self.assertEqual(result['messages'][-3],data['messages'][-2])
+            self.assertEqual(result['messages'][-2],event)
+            self.assertIn('用途：时间附注',result['messages'][-1]['content'])
+            self.assertEqual(result['messages'][-1]['role'],'system')
+
     def test_system_text_blocks_and_no_system_request(self):
         data={'messages':[{'role':'system','content':[{'type':'text','text':'keep me'}]}, {'role':'user','content':'hello'}]}
         original=copy.deepcopy(data);result=g.refresh_runtime_clock(data,tail_context=True)

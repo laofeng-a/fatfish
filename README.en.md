@@ -82,7 +82,9 @@ Autonomous activity and its derived alarms, cron jobs, queued wakeups, and callb
 
 Task reporting has independent global and per-task switches, enabled by default. Explicit reports may describe blockers, decisions, or completion; disabling reports still allows progress and internal records. Contacting the user and retaining the next wakeup are separate decisions.
 
-Implementation: [task versions, provenance, and wakeup state](server-setup/agent_loops.py), [per-call context assembly and audit](picoclaw/pkg/agent/fatfish_loops.go), [cron provenance and cancellation](picoclaw/pkg/tools/fatfish_loop_cron.go), and [runtime tools and receipt routing](server-setup/runtime_policy.py).
+Every model call includes a program-generated current-event marker distinguishing human messages, autonomous wakeups, patrols, quota checks, and executor/tool receipts, with the source message ID. Tool continuations retain the true initiating source. The dynamic clock supplies time context, while original dialogue stays unchanged. See the [event-source release record](docs/RELEASE-2026-11-05-TURN-SOURCE.md) for real-input replays and rollback.
+
+Implementation: [task versions, provenance, and wakeup state](server-setup/agent_loops.py), [per-call context assembly and audit](picoclaw/pkg/agent/fatfish_loops.go), [current-event provenance](picoclaw/pkg/agent/fatfish_turn_event.go), [cron provenance and cancellation](picoclaw/pkg/tools/fatfish_loop_cron.go), and [runtime tools and receipt routing](server-setup/runtime_policy.py).
 
 ### 4. Scheduling and delivery: prioritize people, keep internal results quiet
 

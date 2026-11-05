@@ -379,6 +379,10 @@ class AgentLoops:
             human=bool(self.source(db,context).get('id'))
             row=db.execute('SELECT * FROM loop_tasks WHERE id=?',(task,)).fetchone() if task else None
             result={'allowed':True,'active':active,'managed':bool(row or epoch is not None or context.get('session_key')=='agent:quota'),'task_id':task or '', 'epoch':epoch,'version':row['version'] if row else 0}
+            message=str(context.get('message_id') or '')
+            if message.startswith('heartbeat:'):
+                wake=db.execute('SELECT COALESCE(l.kind,w.kind) AS kind FROM wakes w LEFT JOIN loop_wakes l ON l.id=w.id WHERE w.id=?',(message.removeprefix('heartbeat:'),)).fetchone()
+                if wake:result['wake_kind']=wake['kind']
             result['report']=bool(row['report']) if row else True
             reporting=self.r._get(db,'loop_reporting','1')=='1'
             if row or context.get('session_key')=='agent:quota':result['report']=result['report'] and reporting

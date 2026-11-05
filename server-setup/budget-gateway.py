@@ -127,6 +127,7 @@ def refresh_runtime_clock(data, tail_context=False):
     clock=('[fatfish_runtime_clock]\n'
            '当前日期时间：'+now.isoformat(timespec='seconds')+'（星期'+weekday+'）\n'
            '时区：UTC+08:00，jg当地时间。每次模型调用前刷新，今天、明天、昨天按此理解。\n'
+           '用途：时间附注，用于理解日期、时刻与相对时间；本轮处理事项依据真实消息及事件来源。\n'
            '[/fatfish_runtime_clock]')
     result=dict(data);result['messages']=[dict(m) if isinstance(m,dict) else m for m in messages]
     if tail_context:

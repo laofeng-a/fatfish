@@ -51,6 +51,7 @@ class LoopTests(unittest.TestCase):
             self.assertEqual(db.execute('SELECT COUNT(*) FROM loop_quota').fetchone()[0],1)
             wake=self.r.loops.claim(db,'q'*24,reset+1)
         self.assertEqual(wake['session_key'],'agent:task-'+b['task_id'])
+        self.assertEqual(self.r.action('loop_context',{'session_key':wake['session_key'],'message_id':'heartbeat:'+wake['wake_id']})['wake_kind'],'quota')
         self.assertEqual(self.task('read',task_id=a['task_id'])['monitor'],False)
 
     def test_quiet_autonomy_continues_and_user_off_revokes_descendants(self):
@@ -58,6 +59,7 @@ class LoopTests(unittest.TestCase):
             wake=self.r.loops.claim(db,'a'*24,time.time()+901)
         self.assertEqual(wake['kind'],'autonomy')
         ctx=dict(self.ctx,session_key=wake['session_key'],message_id='heartbeat:'+wake['wake_id'])
+        self.assertEqual(self.r.action('loop_context',ctx)['wake_kind'],'autonomy')
         self.r.action('wake_done',dict(wake_id=wake['wake_id'],outcome='completed',summary='安静阅读'))
         a=self.r.call('silent_alarm',dict(action='create',purpose='maintenance',task='接着读',delay_seconds=120,_context=ctx))
         independent=self.r.call('reminder',dict(action='create',text='jg交办独立提醒',delay_seconds=300,_context=self.ctx))

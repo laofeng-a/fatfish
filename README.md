@@ -82,7 +82,9 @@ Telegram 助手与桌面编码工具通过持久化队列协作。SQLite 保存�
 
 任务汇报有独立总开关及单任务开关，默认开启。开启时可显式报告阻断、决策需求和完成结果；关闭后仍可推进、保存内部记录。是否联系用户与是否保留下次唤醒分别决定。
 
-实现入口：[任务、来源版本与两类唤醒状态机](server-setup/agent_loops.py)、[逐次模型请求组装与审计](picoclaw/pkg/agent/fatfish_loops.go)、[cron 来源与撤销](picoclaw/pkg/tools/fatfish_loop_cron.go)、[运行时工具与回执接入](server-setup/runtime_policy.py)。
+每次模型调用都有程序生成的当前事件标识，区分真人消息、自主唤醒、任务巡检、额度检查及执行端/工具回执，带来源消息号；同轮工具续接保留真实触发来源。动态时钟仅作时间附注，原始聊天正文保持不变。实际回放与回滚见[来源标识修复记录](docs/RELEASE-2026-11-05-TURN-SOURCE.md)。
+
+实现入口：[任务、来源版本与两类唤醒状态机](server-setup/agent_loops.py)、[逐次模型请求组装与审计](picoclaw/pkg/agent/fatfish_loops.go)、[当前事件来源](picoclaw/pkg/agent/fatfish_turn_event.go)、[cron 来源与撤销](picoclaw/pkg/tools/fatfish_loop_cron.go)、[运行时工具与回执接入](server-setup/runtime_policy.py)。
 
 ### 4. 前后台调度与投递：真人优先，内部结果保持静默
 

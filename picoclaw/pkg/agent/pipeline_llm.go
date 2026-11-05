@@ -122,6 +122,9 @@ func (p *Pipeline) CallLLM(
 		}
 	}
 
+	if err := prepareFatfishLoopRequest(turnCtx, ts, exec); err != nil {
+		return ControlBreak, err
+	}
 	_, usesNumberedHistory := p.ContextManager.(*fatfishHistoryManager)
 	if fatfish.Enabled() && !usesNumberedHistory {
 		exec.callMessages = foldFatfishToolResults(exec.callMessages)
@@ -135,6 +138,9 @@ func (p *Pipeline) CallLLM(
 		if iteration == 1 {
 			manager.sample(ts, exec.callMessages, exec.providerToolDefs)
 		}
+	}
+	if err := auditFatfishLoopRequest(turnCtx, ts, exec); err != nil {
+		return ControlBreak, err
 	}
 	al.emitEvent(
 		runtimeevents.KindAgentLLMRequest,

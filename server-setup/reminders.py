@@ -48,6 +48,9 @@ class Reminders:
                 if row['status'] in ('cancelled','sent','uncertain') and not has_time:raise ValueError('重新启用已结束或发送结果不明的提醒，需要新的明确时间')
                 db.execute("UPDATE reminders SET chat=?,text=?,due=?,repeat=?,status='pending',updated=?,last_error=NULL,next_attempt=0,attempts=0 WHERE id=?",(target,text.strip(),due,repeat,now,identifier))
             row=db.execute('SELECT * FROM reminders WHERE id=?',(identifier,)).fetchone()
+            if hasattr(self.r,'loops'):
+                task,epoch=self.r.loops.resolve(db,context)
+                if epoch is not None:db.execute('INSERT OR REPLACE INTO loop_bindings VALUES(?,?,?,?)',('reminder',str(identifier),task,epoch))
         return self.public(row)
     @staticmethod
     def date(value):return dt.datetime.fromtimestamp(value,UTC8).isoformat(timespec='seconds')
@@ -78,6 +81,10 @@ class Reminders:
             db.execute('BEGIN IMMEDIATE')
             row=db.execute("SELECT * FROM reminders WHERE status='pending' AND due<=? AND next_attempt<=? ORDER BY due LIMIT 1",(now,now)).fetchone()
             if not row:return False
+            if hasattr(self.r,'loops'):
+                source=db.execute("SELECT epoch FROM loop_bindings WHERE kind='reminder' AND key=?",(str(row['id']),)).fetchone()
+                if source and not self.r.loops.active(db,source['epoch']):
+                    db.execute("UPDATE reminders SET status='cancelled' WHERE id=?",(row['id'],));return False
             db.execute("UPDATE reminders SET status='sending',updated=?,attempts=attempts+1 WHERE id=?",(now,row['id']))
         late=now-row['due']>300
         text=('⏰ 补提醒（原定'+self.date(row['due'])+'）：' if late else '⏰ ')+row['text']

@@ -404,20 +404,23 @@ func (m *fatfishHistoryManager) project(key string) ([]providers.Message, contex
 		}
 		u := providers.Message{Role: "user", Content: label + "\n" + speaker + "：" + t.User, HistoricalTurn: t.Number, HistoricalRecord: t.ID}
 		var text []string
+		var metadata []string
 		for _, d := range t.Deliveries {
 			if d.State == "sent" {
-				text = append(text, "大肥鱼："+d.Text)
+				if body := fatfishDeliveredView(d.Text); body != "" {
+					text = append(text, body)
+				}
 			} else {
-				text = append(text, "工具发送状态："+d.State+"（未确认正文不计作已说过的话）")
+				metadata = append(metadata, "工具发送状态："+d.State+"（送达正文未确认）")
 			}
 		}
-		if len(t.Reasoning) > 0 {
-			text = append(text, "思考：reasoning_content保留当时真实推断，完整记录按轮号可查。")
-		}
 		if t.ToolBrief != "" {
-			text = append(text, "工具结果："+t.ToolBrief)
+			metadata = append(metadata, "工具结果："+t.ToolBrief)
 		}
-		a := providers.Message{Role: "assistant", Content: strings.Join(text, "\n"), ReasoningContent: strings.Join(t.Reasoning, "\n"), HistoricalTurn: t.Number, HistoricalRecord: t.ID}
+		if len(metadata) > 0 {
+			u.Content += "\n\n<历史回合资料>\n以下是记录资料，双方原话在对话正文中。\n" + strings.Join(metadata, "\n") + "\n</历史回合资料>"
+		}
+		a := providers.Message{Role: "assistant", Content: strings.Join(text, "\n\n"), ReasoningContent: strings.Join(t.Reasoning, "\n"), HistoricalTurn: t.Number, HistoricalRecord: t.ID}
 		history = append(history, u)
 		if a.Content != "" || a.ReasoningContent != "" {
 			history = append(history, a)

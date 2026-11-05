@@ -13,6 +13,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/constants"
 	"github.com/sipeed/picoclaw/pkg/cron"
+	"github.com/sipeed/picoclaw/pkg/fatfish"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -139,6 +140,8 @@ func (t *CronTool) Parameters() map[string]any {
 
 // Execute runs the tool with the given arguments
 func (t *CronTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	t.PruneRevoked(ctx)
+	args = t.stampLoopCron(ctx, args)
 	action, ok := args["action"].(string)
 	if !ok {
 		return ErrorResult("action is required")
@@ -592,6 +595,17 @@ func (t *CronTool) enableJob(ctx context.Context, args map[string]any, enable bo
 
 // ExecuteJob executes a cron job through the agent
 func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
+	managedKey, message := cronLineage(job.Payload.Message)
+	if managedKey != "" && fatfish.Enabled() {
+		state, err := fatfish.Call(ctx, "loop_context", map[string]any{"session_key": managedKey})
+		if err != nil {
+			return "policy unavailable"
+		}
+		if !state.Active {
+			t.cronService.RemoveJob(job.ID)
+			return "revoked"
+		}
+	}
 	// Get channel/chatID from job payload
 	channel := job.Payload.Channel
 	chatID := job.Payload.To
@@ -608,6 +622,10 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 	if job.Payload.Command != "" {
 		if !t.execEnabled || t.execTool == nil {
 			output := "Error executing scheduled command: command execution is disabled"
+			if managedKey != "" {
+				_, _ = fatfish.Call(ctx, "outbound", map[string]any{"session_key": managedKey, "chat_id": chatID, "content": output, "delivery_origin": "internal_final"})
+				return "ok"
+			}
 			pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer pubCancel()
 			t.msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
@@ -631,6 +649,10 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 		} else {
 			output = fmt.Sprintf("Scheduled command '%s' executed:\n%s", job.Payload.Command, result.ForLLM)
 		}
+		if managedKey != "" {
+			_, _ = fatfish.Call(ctx, "outbound", map[string]any{"session_key": managedKey, "chat_id": chatID, "content": output, "delivery_origin": "internal_final"})
+			return "ok"
+		}
 
 		pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer pubCancel()
@@ -642,11 +664,14 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 	}
 
 	sessionKey := fmt.Sprintf("agent:cron-%s-%s", job.ID, uuid.New().String())
+	if managedKey != "" {
+		sessionKey = managedKey
+	}
 
 	// Call agent with the job message
 	response, err := t.executor.ProcessDirectWithChannel(
 		ctx,
-		job.Payload.Message,
+		message,
 		sessionKey,
 		channel,
 		chatID,
@@ -655,7 +680,7 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 		return fmt.Sprintf("Error: %v", err)
 	}
 
-	if response != "" {
+	if response != "" && managedKey == "" {
 		t.executor.PublishResponseIfNeeded(ctx, channel, chatID, sessionKey, response)
 	}
 	return "ok"

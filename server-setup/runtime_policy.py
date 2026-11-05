@@ -28,6 +28,7 @@ from claude_bridge import ClaudeBridge
 from notion_reader import NotionReader
 from video_jobs import VideoJobs
 from silent_alarms import SilentAlarms
+from agent_loops import AgentLoops
 from pulse_policy import PulsePolicy
 from todo_tasks import TodoTasks
 from diary_maintenance import DiaryMaintenance
@@ -112,7 +113,10 @@ TOOLS=[
  tool('codex','指挥Codex：create(title,cwd)新建对话并沿用返回的thread_id；list找default_thread_id，read看带phase与状态证据的进展，send交代任务，status查请求，usage看额度，stop停止。随时可用continue(thread_id,text)或continue(job_id,text)推进；原目标达成就finish收口（status省略为completed），复用已有有效验证；有具体缺口才继续，wait_for_jg等jg决定。所有场景操作能力相同。read/send/stop可省略thread_id沿用当前会话。慢查询结果返回后会自动接续，可先继续聊天或安静结束；refresh=true刷新缓存。',{'action':{'type':'string','enum':['status','list','read','create','send','stop','usage','continue','finish','wait_for_jg']},'query':TEXT,'title':TEXT,'cwd':{'type':'string','description':'新对话的电脑工作目录，省略时沿用当前会话目录'},'model':{'type':'string','description':'仅在jg指定时填写模型；省略沿用本机默认'},'thread_id':{'type':'string','description':'create/list返回的真实thread_id；省略沿用当前绑定会话。'},'text':TEXT,'job_id':{'type':'string','description':'请求编号，用于status或续接；与thread_id区分'},'refresh':{'type':'boolean'},'status':{'type':'string','enum':['completed','failed','stopped']}},['action'],False),
  tool('dsh','指挥DSH：create(title,cwd)新建对话并沿用返回的thread_id；list找default_thread_id，read看带phase与状态证据的进展，send交代任务，status查请求，stop停止。随时可用continue(thread_id,text)或continue(job_id,text)推进；原目标达成就finish收口（status省略为completed），复用已有有效验证；有具体缺口才继续，wait_for_jg等jg决定。所有场景操作能力相同。read/send/stop可省略thread_id沿用当前会话。慢查询结果返回后会自动接续，可先继续聊天或安静结束；refresh=true刷新缓存。',{'answers':{'type':'object','description':'回应DSH待答问题：{call_id,items:[{id,selected:[],custom:文字}]}；可与continue/send一起使用'},'action':{'type':'string','enum':['status','list','read','create','send','stop','continue','finish','wait_for_jg']},'query':TEXT,'title':TEXT,'cwd':{'type':'string','description':'新对话的电脑工作目录，省略时沿用当前会话目录'},'model':{'type':'string','description':'仅在jg指定时填写模型；省略沿用本机默认'},'thread_id':{'type':'string','description':'create/list返回的真实thread_id；省略沿用当前绑定会话。'},'text':TEXT,'job_id':{'type':'string','description':'请求编号，用于status或续接；与thread_id区分'},'refresh':{'type':'boolean'},'status':{'type':'string','enum':['completed','failed','stopped']}},['action'],False),
  tool('reminder','管理到点发消息的提醒：create/list/update/cancel。due_at填含时区时间，或delay_seconds设相对时间，repeat可none/daily/weekly，chat_id选择目标会话。',{'action':{'type':'string','enum':['create','list','update','cancel']},'id':{'type':'integer','minimum':1},'text':TEXT,'due_at':TEXT,'delay_seconds':{'type':'integer','minimum':1},'repeat':{'type':'string','enum':['none','daily','weekly']},'chat_id':CHAT_TARGET},['action'],False),
- tool('silent_alarm','管理三种节拍create/list/update/cancel：purpose=chat陪聊固定120秒；quota_watch任务运行时盯额度固定300秒；quota_reset在实际重置时间只执行一次。jg最新意愿优先，不合适就cancel；其余不挂。due_at/delay_seconds设首次时间；list读内部记录。',{'action':{'type':'string','enum':['create','list','update','cancel']},'id':{'type':'integer','minimum':1},'task':TEXT,'purpose':{'type':'string','enum':['chat','quota_watch','quota_reset']},'due_at':TEXT,'delay_seconds':{'type':'integer','minimum':1},'interval_seconds':{'type':'integer','minimum':0,'maximum':31622400}},['action'],False),
+ tool('task_loop','持久化任务：register登记目标、完成标准和有效约定；dispatch统一登记并派单（backend、request）；read/list查任务及完整回执；update更新对应task_id的目标、约定和进展；monitor只开关25分钟巡检；report独立开关汇报，scope=all控制第一类总开关，指定task_id可单独调整；finish记录遗留并结束巡检。后续补充只关联正确任务，旧版保留。任务达标后复用证据果断收口。',{'action':{'type':'string','enum':['register','dispatch','list','read','update','monitor','report','finish']},'scope':{'type':'string','enum':['all','task']},'task_id':TEXT,'goal':TEXT,'completion':TEXT,'agreements':TEXT,'progress':TEXT,'waiting':TEXT,'next':TEXT,'leftovers':TEXT,'enabled':{'type':'boolean'},'status':TEXT,'backend':{'type':'string','enum':['codex','dsh','claude_code']},'request':{'type':'object'}},['action'],False),
+ tool('autonomy','自主活动status查总开关、近期活动与续记；adjust调整下次间隔（默认15分钟，最少120秒）；note只留值得接续的内容。安静一轮仍保留下次机会。enable/disable依据jg本轮明确指令管理总开关；jg关闭后恢复由jg决定，已交执行端继续运行，迟到结果只保存。',{'action':{'type':'string','enum':['status','adjust','note','enable','disable']},'interval_seconds':{'type':'integer','minimum':120},'note':TEXT},['action'],False),
+ tool('quota_wait','按执行端真实usage回执的reset_at守候额度，同一窗口复用排程；独立于任务巡检及收口。到点查额度，接续原task_id，复用已有请求。',{'provider':{'type':'string','enum':['codex','dsh','claude']},'reset_at':{'type':'number'},'task_id':TEXT},['provider','reset_at'],False),
+ tool('silent_alarm','维护或独立静默提醒create/list/update/cancel，重复间隔最短120秒；task_loop管理任务巡检，autonomy管理自主活动，quota_wait按真实重置时间守候额度。自主活动派生安排随总开关撤销。due_at/delay_seconds设首次时间；list读内部记录。',{'action':{'type':'string','enum':['create','list','update','cancel']},'id':{'type':'integer','minimum':1},'task':TEXT,'purpose':{'type':'string','enum':['chat','quota_watch','quota_reset','maintenance']},'due_at':TEXT,'delay_seconds':{'type':'integer','minimum':1},'interval_seconds':{'type':'integer','minimum':0,'maximum':31622400}},['action'],False),
  tool('bilibili_comments','读取B站评论与楼中楼，返回作者和回复关系。order选择排序，cursor/root/page继续读取。',{'url':TEXT,'order':{'type':'string','enum':['hot','new']},'cursor':TEXT,'root':TEXT,'page':{'type':'integer','minimum':1,'maximum':100}},['url']),
  tool('bilibili_discover','搜索B站视频、找相关推荐，或按数字UID查UP主投稿。',{'mode':{'type':'string','enum':['search','related','uploader']},'query':TEXT,'limit':{'type':'integer','minimum':1,'maximum':20}},['mode','query']),
  tool('douyin_video','读取抖音链接或分享文案。transcript取信息和音轨转写，metadata取信息；queued/processing时用job_id继续查询，capabilities说明实际覆盖。',{'url':TEXT,'mode':{'type':'string','enum':['metadata','transcript']},'job_id':TEXT}),
@@ -206,6 +210,7 @@ class Runtime:
         self.learning=MemoryLearning(self)
         self.exploration=ExplorationOpportunities(self)
         self.workflows=CommonWorkflows(self)
+        self.loops=AgentLoops(self)
 
     @contextmanager
     def db(self):
@@ -244,6 +249,7 @@ class Runtime:
         chat=str(data.get('chat_id',''));sender=str(data.get('sender_id',''))
         text=(data.get('text') or data.get('caption') or '').strip()
         message=str(data.get('message_id',''))
+        loop_control=''
         with self.db() as db:
             is_bot=data.get('sender_is_bot') is True
             is_owner=sender==self.owner and not is_bot
@@ -284,9 +290,11 @@ class Runtime:
             if data.get('reply_to_message_id'):
                 db.execute('INSERT OR REPLACE INTO message_replies VALUES(?,?,?)',(chat,message,str(data['reply_to_message_id'])))
             if chat==self.owner:
+                if is_owner and not data.get('forwarded'):loop_control=self.loops.inbound(db,text,message,str(data.get('reply_to_message_id',''))) or ''
                 self._set(db,'last_user',time.time());self._set(db,'unanswered',0)
                 db.execute('UPDATE wakes SET finished=1 WHERE finished=0')
             context=self._group_turn_context(db,chat,message,sender,is_owner,data)
+            if loop_control:context='\n\n'.join(p for p in (context,loop_control) if p)
             if chat==self.owner and is_owner:
                 context='\n\n'.join(part for part in (context,self.learning.expression_context(db,chat,text),
                     self.learning.correction_context(db,chat)) if part)
@@ -355,6 +363,10 @@ class Runtime:
                 self._set(db,'current_wake',wake_id)
                 review=self.learning.review_context(db,self.owner,wake_id)
                 return {'allowed':True,'wake_id':wake_id,'silent':True,'kind':'diary','context':'\n\n'.join(p for p in (self.diary.prompt(diary),review) if p)}
+            managed=self.loops.claim(db,wake_id,time.time())
+            if managed:
+                self._set(db,'current_wake',wake_id)
+                return managed
             if self.pulses.enabled:
                 alarm=self.silent_alarms.claim(db,wake_id,time.time())
                 if alarm:return self._start_alarm_wake(db,alarm,wake_id,now)
@@ -411,7 +423,12 @@ class Runtime:
         self._set(db,'current_wake',wake_id);self._set(db,'last_scheduled_kind','silent')
         snapshot=self.pulses.snapshot(db,alarm,time.time())
         context='\n\n'.join(p for p in (self.silent_alarms.prompt(alarm),snapshot) if p)
-        return {'allowed':True,'wake_id':wake_id,'silent':True,'context':context}
+        route={}
+        binding=db.execute("SELECT task_id,epoch FROM loop_bindings WHERE kind='alarm' AND key=?",(str(alarm['id']),)).fetchone()
+        if binding:
+            db.execute('INSERT INTO loop_wakes VALUES(?,?,?,?)',(wake_id,binding['task_id'],binding['epoch'],'alarm'))
+            route['session_key']='agent:task-'+binding['task_id'] if binding['task_id'] else 'agent:autonomy-'+str(binding['epoch'])
+        return {'allowed':True,'wake_id':wake_id,'silent':True,'context':context,**route}
 
     def _background_wake_id(self,db,message):
         source=re.fullmatch(r'heartbeat:([a-f0-9]{24})',str(message or ''))
@@ -434,6 +451,11 @@ class Runtime:
         reason='internal_error' if failure else ('internal_delivery' if internal else ('heartbeat_silent' if background and 'HEARTBEAT_OK' in text else ''))
         if not reason and content.strip() in ('HEARTBEAT_OK','NO_REPLY','[NO_REPLY]'):reason='silent_control'
         origin=data.get('delivery_origin','')
+        with self.db() as db:
+            gate=self.loops.send_gate(db,data)
+            task_id,_=self.loops.resolve(db,data)
+        if origin=='auto_final' and task_id:reason=reason or 'task_final'
+        if gate and origin not in ('auto_final','internal_final'):return {'allowed':True,'skip':True,'reason':gate}
         if not reason and _explicit_internal_note(texts,
                 enabled=self.settings.get('explicit_internal_note_filter_enabled',False),
                 background=background,origin=origin):
@@ -441,6 +463,8 @@ class Runtime:
         if not reason and (origin=='internal_final' or (background and origin=='auto_final')):
             reason='internal_final' if origin=='internal_final' else 'background_final'
         if reason:
+            if task_id and origin=='internal_final':
+                with self.db() as db:db.execute('INSERT INTO loop_task_events(task_id,kind,source,content,created) VALUES(?,?,?,?,?)',(task_id,'internal_final',source,text[:50000],time.time()))
             # Internal output stays inspectable without becoming a Telegram send.
             entry={'at':now.isoformat(timespec='seconds'),'reason':reason,'source':source,'mode':mode,'summary':text[:2000],
                    'delivery_origin':origin,'internal_reason':str(data.get('internal_reason',''))}
@@ -463,6 +487,8 @@ class Runtime:
                 previous=db.execute('SELECT status,ticket FROM sends WHERE chat=? AND fingerprint=? AND created>?',(chat,fingerprint,time.time()-90)).fetchone()
                 if previous:return {'allowed':True,'skip':True,'send_status':previous[0],'ticket':previous['ticket']}
             ticket=secrets.token_hex(16)
+            task_id,epoch=self.loops.resolve(db,data)
+            if task_id:db.execute('INSERT OR REPLACE INTO loop_bindings VALUES(?,?,?,?)',('ticket',ticket,task_id,epoch))
             db.execute('INSERT INTO sends(ticket,chat,kind,fingerprint,mode,wake,status,content,created) VALUES(?,?,?,?,?,?,?,?,?)',
                        (ticket,chat,kind,fingerprint,mode,wake_id,'reserved',content[:50000],time.time()))
             if turn:
@@ -479,6 +505,9 @@ class Runtime:
                 status=data.get('status') if data.get('status') in ('sent','partial','rejected','unknown') else 'unknown'
                 ids=[str(x) for x in data.get('message_ids',[])][:128]
                 db.execute('UPDATE sends SET status=?,message_ids=? WHERE ticket=?',(status,json.dumps(ids),row['ticket']))
+                binding=db.execute("SELECT task_id,epoch FROM loop_bindings WHERE kind='ticket' AND key=?",(row['ticket'],)).fetchone()
+                if binding and status in ('sent','partial'):
+                    for identifier in ids:db.execute('INSERT OR REPLACE INTO loop_bindings VALUES(?,?,?,?)',('sent',identifier,binding['task_id'],binding['epoch']))
                 content=data.get('delivered_content',row['content'] if status=='sent' else '')
                 if content:
                     db.execute('INSERT OR IGNORE INTO events(chat,msg,kind,content,created) VALUES(?,?,?,?,?)',(row['chat'],ids[0] if ids else row['ticket'],'assistant',content,time.time()))
@@ -516,6 +545,7 @@ class Runtime:
         return [{key:row[key] for key in row.keys() if row[key] is not None} for row in rows]
 
     def action(self,name,data):
+        if name=='loop_context':return self.loops.request(data)
         if name=='turn_trace':return self.conversations.trace(data)
         if name=='inbound':return self.inbound(data)
         if name=='outbound':return self.outbound(data)
@@ -558,6 +588,9 @@ class Runtime:
                 self.silent_alarms.finish(db,wake_id,data.get('outcome','completed'),data.get('summary',''))
                 self.diary.finish(db,wake_id,data.get('outcome','completed'),data.get('summary',''))
                 self.learning.finish_review(db,wake_id,data.get('outcome','completed'))
+                loop=db.execute('SELECT * FROM loop_wakes WHERE id=?',(wake_id,)).fetchone()
+                if loop:
+                    db.execute('INSERT INTO loop_activity(epoch,kind,content,created) VALUES(?,?,?,?)',(loop['epoch'],loop['kind'],str(data.get('summary',''))[:2000],time.time()))
                 db.execute('UPDATE wakes SET finished=1 WHERE id=?',(wake_id,))
             return {'allowed':True}
         if name=='background_allowed':return {'allowed':True}
@@ -607,6 +640,14 @@ class Runtime:
 
     def call(self,name,args):
         args,context,chat=self.context(args)
+        with self.db() as db:
+            _,epoch=self.loops.resolve(db,context)
+            if not self.loops.admitted(db,context):raise ValueError('本轮盯守或活动已撤销，不再派发新动作；执行端按jg的任务指令处理')
+        if name=='task_loop':return self.loops.task(args,context,chat)
+        if name=='autonomy':return self.loops.autonomy(args,context,chat)
+        if name=='quota_wait':return self.loops.quota(args,context)
+        if name in ('codex','dsh','claude_code'):
+            context=self.loops.bridge_context(args,context,{'claude_code':'claude'}.get(name,name))
         background_mode='background' if context.get('session_key')=='heartbeat' else None
         self.platform_consent.ensure(name,args,context,chat)
         if name in COMMON_WORKFLOW_NAMES:return self.workflows.call(name,args,context,chat)
@@ -620,13 +661,20 @@ class Runtime:
             return self.record_reading(chat,name,self.video.call(args,chat))
         if name=='emote_save' and 'url' in args:self.platform_consent.ensure('image_read',args,context,chat)
         if name=='reminder':return self.reminders.call(args,context,chat)
-        if name=='silent_alarm':return self.silent_alarms.call(args,context,chat)
+        if name=='silent_alarm':
+            if args.get('purpose')=='chat' and args.get('action') in ('create','update'):
+                return self.loops.autonomy({'action':'adjust','interval_seconds':args.get('interval_seconds') or self.settings.get('autonomy_interval_seconds',900)},context,chat)
+            return self.silent_alarms.call(args,context,chat)
         if name=='todo':return self.todos.call(args,context,chat,background_mode=background_mode)
         if name=='emote_history':return sent_media(self,args,context,chat)
         if name=='chat_status':return self.conversations.status(args,context,chat)
-        if name=='codex':return self.codex.call(args,context,chat)
-        if name=='dsh':return self.dsh.call(args,context,chat)
-        if name=='claude_code':return self.claude.call(args,context,chat)
+        if name in ('codex','dsh','claude_code'):
+            bridge={'codex':self.codex,'dsh':self.dsh,'claude_code':self.claude}[name]
+            result=bridge.call(args,context,chat)
+            if context.get('task_id'):
+                result=dict(result,task_id=context['task_id'],task_version=context['task_version'])
+                if args.get('action')=='finish':self.loops.task({'action':'finish','task_id':context['task_id'],'status':args.get('status','completed')},context,chat)
+            return result
         if name=='emote_save':return self.emotes.save(args,context,chat)
         if name=='emote_update':return self.emotes.update(args)
         if name=='telegram_chats':
@@ -707,6 +755,7 @@ class Runtime:
             turn=context.get('message_id','')
             if target_chat!=chat:turn='from:'+chat+':'+str(turn or context.get('session_key',''))
             decision=self.outbound({'chat_id':target_chat,'kind':kind,'content':content,'parts':parts,'turn':turn,
+                                    'session_key':context.get('session_key',''),
                                     'delivery_origin':'send_tool',
                                     'delivery':{'reply_to_message_id':reply,'reaction':reaction,'emote_id':item['id'] if item else None},
                                     'background_context':bool(context.get('codex_event_id')),

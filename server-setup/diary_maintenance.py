@@ -196,7 +196,9 @@ class DiaryMaintenance:
         before=dt.datetime.fromtimestamp(end,UTC8).isoformat()
         return ('[日记维护]\n日期：'+row['day']+'；目标：'+row['path']+'\n'
                 '历史范围：after='+after+'，before='+before+'\n'
-                '回顾当天真实聊天与阅读，记下值得留下的经历、当时表达的感想和想接着聊的事。'
+                '按日期回顾真实聊天与阅读，丰富保留经历、双方怎样回应、接梗、表达感受、纠正误会及相处细节。'
+                '技术话题记jg的想法、感受、选择和双方交流经过；执行目标、进度、文件修改、部署及验收证据由任务记录承接。'
+                '容量上限18000字节，依据真实材料自然写长短。较早经历可通过日期和主题查找，精确引文回查聊天原文。'
                 '用mcp_reader_history_find与history_expand核对原文。动作成果依据实际回执；'
                 '证据有限时写成“当时对话提到”，说明把握程度。'
                 '先memory_note_read读取目标文件及revision，保留已有真实内容，'

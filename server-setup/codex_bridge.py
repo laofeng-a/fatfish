@@ -125,6 +125,7 @@ class CodexBridge:
             event=db.execute('SELECT c.thread_id FROM codex_events e JOIN codex_chains c ON c.id=e.chain_id WHERE e.id=?',(event_id,)).fetchone() if event_id else None
             if event:thread=event['thread_id']
         scope=str(context.get('chat_id') or self.r.owner).split('/',1)[0]
+        if context.get('task_id') and (str(context.get('session_key','')).startswith(('agent:task-','agent:cron-','agent:autonomy-')) or str(context.get('message_id','')).startswith(('heartbeat:','codex-event:'))):scope+=':task:'+context['task_id']
         if not thread:
             binding=db.execute('SELECT thread_id FROM codex_thread_bindings WHERE scope=?',(scope,)).fetchone()
             thread=binding['thread_id'] if binding else self.r.settings.get('codex_default_thread_id')
@@ -323,6 +324,7 @@ class CodexBridge:
         clean=sanitize_usage_summary(value)
         db.execute('INSERT OR REPLACE INTO codex_usage_cache(id,observed_at,payload,created) VALUES(1,?,?,?)',
             (clean['observed_at'],json.dumps(clean,ensure_ascii=False),time.time()))
+        if hasattr(self.r,'loops'):self.r.loops.observe_usage(db,getattr(self.r,'backend','codex'),clean)
         return clean
 
     def enqueue_event(self,db,job,turn,turn_status,final):
@@ -361,6 +363,9 @@ class CodexBridge:
         return event_id if re.fullmatch(r'[a-f0-9]{24}',event_id) else None
 
     def _create_followup(self,db,chain,event,text,source,auto_reply,origin=None):
+        if hasattr(self.r,'loops'):
+            pending=self.r.loops.pending_request(db,origin or {},getattr(self.r,'backend','codex'),chain['thread_id'])
+            if pending:return dict(self.view(pending),reused_pending_request=True)
         if not isinstance(text,str) or not text.strip() or len(text)>12000:raise ValueError('需要有效的Codex回复文字，最多12000字')
         prefix='[Fatfish 自动回复（不是 jg）]\n' if auto_reply else '[jg 补充]\n'
         clean_text=prefix+text.strip()
@@ -374,6 +379,7 @@ class CodexBridge:
             db.execute('INSERT INTO codex_jobs(id,source,fingerprint,action,args,state,claim,created,updated,output,chain_id,auto_reply) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
                 (job_id,source,fingerprint,'send',json.dumps(clean,ensure_ascii=False),'queued','',now,now,'',chain['id'],1 if auto_reply else 0))
             db.execute('UPDATE codex_jobs SET origin=? WHERE id=?',(json.dumps(origin or {},ensure_ascii=False),job_id))
+            if hasattr(self.r,'loops'):self.r.loops.bind_job(db,origin or {},getattr(self.r,'backend','codex'),job_id)
         if auto_reply:
             count=chain['automatic_exchanges']+1
             db.execute('UPDATE codex_chains SET state="queued",automatic_exchanges=?,updated=? WHERE id=?',(count,time.time(),chain['id']))
@@ -447,10 +453,14 @@ class CodexBridge:
                             self.close_query_notification(db,item['event_id'],item['id'],'same_read_result_observed')
                 row=db.execute("SELECT e.*,c.thread_id AS resolved_thread_id FROM codex_events e JOIN codex_chains c ON c.id=e.chain_id WHERE (e.status='pending' OR (e.status='claimed' AND e.claimed_until<?)) AND c.state NOT IN ('completed','failed','stopped','auto_limit','unknown','usage_blocked') ORDER BY e.created LIMIT 1",(now,)).fetchone()
                 if not row:return {'event':None}
+                route=self.r.loops.event_context(db,getattr(self.r,'backend','codex'),row['job_id']) if hasattr(self.r,'loops') else {}
+                if route.get('revoked') or route.get('archived'):
+                    db.execute("UPDATE codex_events SET status='delivered',outcome=?,delivered=? WHERE id=?",('autonomy_revoked' if route.get('revoked') else 'task_closed',now,row['id']))
+                    return {'event':None}
                 claim=secrets.token_hex(12)
                 db.execute("UPDATE codex_events SET status='claimed',claim=?,claimed_until=? WHERE id=?",(claim,now+60,row['id']))
                 return {'event':{'id':row['id'],'claim':claim,'chat_id':self.r.owner,'chain_id':row['chain_id'],
-                    'job_id':row['job_id'],'turn_id':row['turn_id'],'thread_id':row['resolved_thread_id'],'turn_status':row['turn_status'],'content':row['content'],'kind':row['kind'],'silent':bool(row['silent'])}}
+                    'job_id':row['job_id'],'turn_id':row['turn_id'],'thread_id':row['resolved_thread_id'],'turn_status':row['turn_status'],'content':row['content'],'kind':row['kind'],'silent':bool(row['silent']),**route}}
         event_id=str(data.get('event_id',''));claim=str(data.get('claim',''))
         if not re.fullmatch(r'[a-f0-9]{24}',event_id) or not re.fullmatch(r'[a-f0-9]{24}',claim):raise ValueError('invalid Codex event receipt')
         with self.r.db() as db:
@@ -584,7 +594,7 @@ class CodexBridge:
             action='send'
         if action not in ('list','read','send','stop','usage','create'):raise ValueError('action使用status/list/read/create/send/stop/usage/continue/finish/wait_for_jg')
         if action=='usage':
-            cached=self.cached_usage()
+            cached=None if args.get('refresh') else self.cached_usage()
             if cached:return cached
         clean={'action':action}
         if action=='create':
@@ -624,6 +634,9 @@ class CodexBridge:
         now=time.time()
         with self.r.db() as db:
             db.execute('BEGIN IMMEDIATE')
+            if action=='send' and hasattr(self.r,'loops'):
+                pending=self.r.loops.pending_request(db,context,getattr(self.r,'backend','codex'),clean.get('thread_id'))
+                if pending:return dict(self.view(pending),reused_pending_request=True)
             if action in ('list','read') and not args.get('refresh'):
                 cached=self.cached_query(db,clean,context)
                 if cached:return cached
@@ -649,6 +662,7 @@ class CodexBridge:
             db.execute('INSERT INTO codex_jobs(id,source,fingerprint,action,args,state,claim,created,updated,output,chain_id,auto_reply) VALUES(?,?,?,?,?,?,?,?,?,?,?,0)',
                 (identifier,source,fingerprint,action,json.dumps(clean,ensure_ascii=False),'queued','',now,now,'',chain_id))
             db.execute('UPDATE codex_jobs SET origin=? WHERE id=?',(json.dumps(context,ensure_ascii=False),identifier))
+            if hasattr(self.r,'loops'):self.r.loops.bind_job(db,context,getattr(self.r,'backend','codex'),identifier)
             if chain_id:
                 db.execute('INSERT INTO codex_chains(id,thread_id,initial_job,state,automatic_exchanges,created,updated) VALUES(?,?,?,"queued",0,?,?)',
                     (chain_id,clean['thread_id'],identifier,now,now))

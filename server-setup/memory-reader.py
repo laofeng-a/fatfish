@@ -183,7 +183,8 @@ def serve(*,runtime=None,settings_path=None,address=('127.0.0.1',18792),on_ready
                 self.send(401);return
             try:
                 length=int(self.headers.get('Content-Length','0'))
-                if not 0<length<=65536:raise ValueError('Invalid size')
+                limit=2*1024*1024 if self.path=='/runtime/loop_context' else 65536
+                if not 0<length<=limit:raise ValueError('Invalid size')
                 message=json.loads(self.rfile.read(length))
                 if not isinstance(message,dict):raise ValueError('Invalid message')
                 if self.path=='/bridge':

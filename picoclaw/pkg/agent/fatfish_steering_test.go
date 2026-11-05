@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -33,6 +34,15 @@ func (p *fatfishInterruptProvider) Chat(ctx context.Context, messages []provider
 		p.sawPeer.Store(true)
 	}
 	if strings.Contains(text, "先查旧话题") && strings.Contains(text, "改聊新话题") {
+		count := 0
+		for _, m := range messages {
+			if m.Role == "user" && m.Content == "改聊新话题" {
+				count++
+			}
+		}
+		if count != 1 {
+			return nil, fmt.Errorf("steering injection expected once, got %d", count)
+		}
 		select {
 		case <-p.corrected:
 		default:

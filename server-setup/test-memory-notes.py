@@ -80,7 +80,11 @@ class NoteTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.write('鲸'*2667)
         today=dt.datetime.now(UTC8).strftime('%Y%m/%Y%m%d.md')
         self.write('当天的真实经历',today)
-        with self.assertRaises(ValueError):self.write('鲸'*2001,today)
+        text='鲸'*5996+'金鱼约定'
+        self.write(text,today)
+        self.assertEqual(self.read(today)['content'],text)
+        self.assertTrue(any(n['path']==today for n in self.r.notes.search('金鱼约定')))
+        with self.assertRaises(ValueError):self.write('鲸'*6001,today)
         self.assertEqual(len(self.read('index')['files']),2)
 
     def test_source_scope_and_version_retention(self):

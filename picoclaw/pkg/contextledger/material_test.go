@@ -2,9 +2,25 @@ package contextledger
 
 import (
 	"encoding/json"
+	"github.com/sipeed/picoclaw/pkg/providers"
 	"strings"
 	"testing"
 )
+
+func TestSummaryMaterialKeepsReadSourcesAndLeavesExecutionInRawLedger(t *testing.T) {
+	turn := Turn{Number: 1, Kind: "human", User: "争执后我们说开了", Reasoning: []string{"执行计划与内部推断"}, ToolBrief: "重启服务成功", Messages: []providers.Message{
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "read", Function: &providers.FunctionCall{Name: "mcp_reader_memory_note_read", Arguments: `{"path":"202611/20261103.md"}`}}, {ID: "exec", Function: &providers.FunctionCall{Name: "exec", Arguments: `{}`}}}},
+		{Role: "tool", ToolCallID: "read", Content: `{"path":"202611/20261103.md","content":"相处细节：他笑着接住了这个梗"}`},
+		{Role: "tool", ToolCallID: "exec", Content: "部署日志与测试统计"},
+	}}
+	raw, _ := ModelMaterialJSON(Material{Past: []Turn{turn}, From: 1, To: 1})
+	if !strings.Contains(string(raw), "相处细节") || strings.Contains(string(raw), "部署日志") || strings.Contains(string(raw), "内部推断") {
+		t.Fatal(string(raw))
+	}
+	if len(turn.Messages) != 3 || len(turn.Reasoning) != 1 {
+		t.Fatal("raw record mutated")
+	}
+}
 
 func TestModelMaterialsSeparateUnverifiedLegacyAndRecentCorrections(t *testing.T) {
 	old := Agreement{ID: "decision", Text: "确认过的决定", State: "active", Sources: []Quote{{Turn: 3, Speaker: "jg", Text: "这件事按这个做"}}}
@@ -13,14 +29,14 @@ func TestModelMaterialsSeparateUnverifiedLegacyAndRecentCorrections(t *testing.T
 	if wire.Previous != nil || wire.Legacy != m.Previous.Body || len(wire.Agreements) != 1 || wire.Template.From != 6 || wire.Template.To != 6 {
 		t.Fatalf("legacy trusted or known data lost: %+v", wire)
 	}
-	if len(wire.Past[0].Dialogue) != 2 || wire.Past[0].Dialogue[1].Speaker != "大肥鱼" || wire.Past[0].Dialogue[1].Turn != 6 || len(wire.Past[0].Reasoning) != 1 {
-		t.Fatal("source tuple or historical reasoning lost")
+	if len(wire.Past[0].Dialogue) != 2 || wire.Past[0].Dialogue[1].Speaker != "大肥鱼" || wire.Past[0].Dialogue[1].Turn != 6 {
+		t.Fatal("source tuple lost")
 	}
 	raw, err := ModelMaterialJSON(m)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, unexpected := range []string{"未确认投递", "近期整段思考不属于校正原话", "近期冗长的工具结论"} {
+	for _, unexpected := range []string{"过去的实际推断", "工具已完成", "recorded_thoughts", "tool_result", "未确认投递", "近期整段思考不属于校正原话", "近期冗长的工具结论"} {
 		if strings.Contains(string(raw), unexpected) {
 			t.Fatalf("unexpected model material %q", unexpected)
 		}

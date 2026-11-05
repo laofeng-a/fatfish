@@ -216,6 +216,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 		}
 		messages = exec.messages
 		pendingMessages = exec.pendingMessages
+		exec.pendingMessages = nil // Ownership moved locally; never append this steering slice to itself.
 		finalContent = exec.finalContent
 
 		if ctrl != ControlBreak && backgroundWantsYield(turnCtx, ts) {

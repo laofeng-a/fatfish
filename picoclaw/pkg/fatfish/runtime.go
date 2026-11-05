@@ -15,18 +15,24 @@ import (
 )
 
 type Decision struct {
-	Allowed   bool        `json:"allowed"`
-	Handled   bool        `json:"handled"`
-	Reply     string      `json:"reply"`
-	Context   string      `json:"context"`
-	WakeID    string      `json:"wake_id"`
-	Silent    bool        `json:"silent"`
-	Ticket    string      `json:"ticket"`
-	Skip      bool        `json:"skip"`
-	RecordID  int         `json:"record_id"`
-	Accepted  bool        `json:"accepted"`
-	Duplicate bool        `json:"duplicate"`
-	Event     *CodexEvent `json:"event,omitempty"`
+	SessionKey string      `json:"session_key"`
+	Managed    bool        `json:"managed"`
+	Report     bool        `json:"report"`
+	Active     bool        `json:"active"`
+	TaskID     string      `json:"task_id"`
+	Version    int         `json:"version"`
+	Allowed    bool        `json:"allowed"`
+	Handled    bool        `json:"handled"`
+	Reply      string      `json:"reply"`
+	Context    string      `json:"context"`
+	WakeID     string      `json:"wake_id"`
+	Silent     bool        `json:"silent"`
+	Ticket     string      `json:"ticket"`
+	Skip       bool        `json:"skip"`
+	RecordID   int         `json:"record_id"`
+	Accepted   bool        `json:"accepted"`
+	Duplicate  bool        `json:"duplicate"`
+	Event      *CodexEvent `json:"event,omitempty"`
 }
 
 func Enabled() bool { return os.Getenv("FATFISH_RUNTIME_TOKEN_FILE") != "" }
@@ -62,7 +68,7 @@ func Call(ctx context.Context, action string, payload any) (Decision, error) {
 		return Decision{}, fmt.Errorf("runtime policy refused request")
 	}
 	var result Decision
-	if err := json.NewDecoder(io.LimitReader(response.Body, 32768)).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(response.Body, 2*1024*1024)).Decode(&result); err != nil {
 		return Decision{}, err
 	}
 	if !result.Allowed {

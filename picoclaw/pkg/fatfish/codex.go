@@ -5,6 +5,7 @@ import "context"
 // CodexEvent is a single durable broker receipt. The claim stays local to the
 // consumer; it is never included in model text or tool arguments.
 type CodexEvent struct {
+	SessionKey string `json:"session_key,omitempty"`
 	ID         string `json:"id"`
 	Claim      string `json:"claim"`
 	ChatID     string `json:"chat_id"`

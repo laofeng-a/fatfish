@@ -16,7 +16,7 @@ class PulseTests(unittest.TestCase):
         self.r=Runtime(config);self.r.diary.claim=Mock(return_value=None);self.r.exploration.consider=Mock()
         self.ctx={'channel':'telegram','chat_id':'123','message_id':'test','session_key':'fixture'}
 
-    def alarm(self,purpose='chat',**extra):
+    def alarm(self,purpose='maintenance',**extra):
         args={'action':'create','task':'本次约定','purpose':purpose,'delay_seconds':1,'interval_seconds':600,'_context':self.ctx}
         args.update(extra);return self.r.call('silent_alarm',args)
 
@@ -30,21 +30,22 @@ class PulseTests(unittest.TestCase):
         with self.r.db() as db:db.execute('UPDATE wakes SET contacted=? WHERE id=?',(contacted,wake['wake_id']))
         self.r.action('wake_done',{'wake_id':wake['wake_id'],'outcome':outcome,'summary':'内部结论'})
 
-    def test_three_exact_cadences(self):
-        for purpose,interval in (('chat',120),('quota_watch',300),('quota_reset',0)):
-            with self.subTest(purpose=purpose):
-                value=self.alarm(purpose);self.assertEqual(value['interval_seconds'],interval);self.assertEqual(value['purpose'],purpose)
+    def test_legacy_chat_updates_adjustable_autonomy(self):
+        state=self.alarm('chat')
+        self.assertEqual(state['interval_seconds'],600)
+        self.assertTrue(state['enabled'])
+        with self.r.db() as db:self.assertEqual(db.execute('SELECT COUNT(*) FROM silent_alarms').fetchone()[0],0)
 
     def test_other_purposes_not_scheduled(self):
-        for purpose in ('reading','maintenance','progress'):
+        for purpose in ('reading','progress'):
             with self.subTest(purpose=purpose),self.assertRaises(ValueError):self.alarm(purpose)
 
     def test_reset_needs_actual_time(self):
         with self.assertRaises(ValueError):self.r.call('silent_alarm',{'action':'create','task':'等重置','purpose':'quota_reset','_context':self.ctx})
 
-    def test_repeat_creation_reuses_same_active_pulse(self):
-        a=self.alarm();b=self.alarm(task='换个话题',_context=dict(self.ctx,message_id='new'))
-        self.assertEqual(a['id'],b['id']);self.assertEqual(self.get(a['id'])['task'],'换个话题')
+    def test_independent_maintenance_does_not_merge_by_purpose(self):
+        a=self.alarm();b=self.alarm(task='另一维护',_context=dict(self.ctx,message_id='new'))
+        self.assertNotEqual(a['id'],b['id'])
 
     def test_no_random_or_todo_model_wakeup(self):
         self.r.todos.due_wake_needed=Mock(return_value=True)
@@ -52,25 +53,25 @@ class PulseTests(unittest.TestCase):
         self.r.exploration.consider.assert_not_called();self.r.todos.due_wake_needed.assert_not_called()
         with self.r.db() as db:self.assertEqual(db.execute('SELECT COUNT(*) FROM wakes').fetchone()[0],0)
 
-    def test_no_share_ends_chain_after_one_model_round(self):
+    def test_no_share_keeps_next_maintenance(self):
         alarm=self.alarm();self.due(alarm['id']);wake=self.r.wake({});self.finish(wake)
-        self.assertEqual(self.get(alarm['id'])['status'],'cancelled')
+        self.assertEqual(self.get(alarm['id'])['status'],'pending')
         self.assertTrue(self.r.wake({})['skip'])
 
-    def test_no_share_still_ends_when_model_updated_its_own_alarm(self):
+    def test_no_share_preserves_model_updated_schedule(self):
         alarm=self.alarm();self.due(alarm['id']);wake=self.r.wake({})
         self.r.call('silent_alarm',{'action':'update','id':alarm['id'],'delay_seconds':120,'_context':self.ctx})
-        self.finish(wake);self.assertEqual(self.get(alarm['id'])['status'],'cancelled')
+        self.finish(wake);self.assertEqual(self.get(alarm['id'])['status'],'pending')
 
-    def test_actual_share_keeps_the_120_second_pulse(self):
+    def test_actual_share_keeps_maintenance_interval(self):
         alarm=self.alarm();self.due(alarm['id']);wake=self.r.wake({});self.finish(wake,contacted=1)
-        self.assertEqual(self.get(alarm['id'])['status'],'pending');self.assertEqual(self.get(alarm['id'])['interval_seconds'],120)
+        self.assertEqual(self.get(alarm['id'])['status'],'pending');self.assertEqual(self.get(alarm['id'])['interval_seconds'],600)
 
-    def test_two_unanswered_rounds_stop_before_third_model_call(self):
+    def test_unanswered_rounds_do_not_cancel_activity(self):
         alarm=self.alarm();self.due(alarm['id'])
-        for _ in range(2):
-            wake=self.r.wake({});self.assertFalse(wake.get('skip'));self.finish(wake,contacted=1);self.due(alarm['id'])
-        self.assertTrue(self.r.wake({})['skip']);self.assertEqual(self.get(alarm['id'])['status'],'cancelled')
+        for _ in range(3):
+            wake=self.r.wake({});self.assertFalse(wake.get('skip'));self.finish(wake);self.due(alarm['id'])
+        self.assertEqual(self.get(alarm['id'])['status'],'pending')
 
     def test_new_human_reply_resets_unanswered_rounds(self):
         alarm=self.alarm()
@@ -80,12 +81,13 @@ class PulseTests(unittest.TestCase):
 
     def test_recent_messages_supplied_without_history_tool_or_external_call(self):
         self.r.event('123','user','这里是刚说的话','7');self.r.telegram=Mock()
-        alarm=self.alarm();self.due(alarm['id']);wake=self.r.wake({})
+        with self.r.db() as db:db.execute('UPDATE loop_autonomy SET next_due=?',(time.time()-1,))
+        wake=self.r.wake({})
         self.assertIn('这里是刚说的话',wake['context']);self.r.telegram.assert_not_called()
 
-    def test_quota_watch_without_running_task_stops_before_model(self):
+    def test_quota_watch_survives_task_closure(self):
         alarm=self.alarm('quota_watch');self.due(alarm['id'])
-        self.assertTrue(self.r.wake({})['skip']);self.assertEqual(self.get(alarm['id'])['status'],'cancelled')
+        wake=self.r.wake({});self.assertFalse(wake.get('skip'));self.finish(wake);self.assertEqual(self.get(alarm['id'])['status'],'pending')
 
     def test_running_quota_watch_has_cached_usage_and_task_without_external_query(self):
         with self.r.db() as db:

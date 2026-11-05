@@ -11,6 +11,7 @@ import time
 
 UTC8=dt.timezone(dt.timedelta(hours=8))
 PROFILE_FILES=frozenset(('USER.md','HEARTBEAT.md','AGENT.md','SOUL.md'))
+DIARY_MAX_BYTES=18000
 
 
 class MemoryNotes:
@@ -43,11 +44,12 @@ class MemoryNotes:
 
     def content(self,path):
         if not path.exists():return ''
+        limit=DIARY_MAX_BYTES if path.parent.parent==self.root and re.fullmatch(r'\d{8}\.md',path.name) else 8000
         info=path.lstat()
-        if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1 or info.st_size>8000:raise ValueError('记忆文件类型或大小不合法')
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1 or info.st_size>limit:raise ValueError('记忆文件类型或大小不合法')
         fd=os.open(path,os.O_RDONLY|getattr(os,'O_NOFOLLOW',0))
-        with os.fdopen(fd,'rb') as stream:raw=stream.read(8001)
-        if len(raw)>8000:raise ValueError('记忆文件过大')
+        with os.fdopen(fd,'rb') as stream:raw=stream.read(limit+1)
+        if len(raw)>limit:raise ValueError('记忆文件过大')
         try:return raw.decode('utf-8')
         except UnicodeDecodeError:raise ValueError('记忆需要UTF-8文字') from None
 
@@ -93,7 +95,7 @@ class MemoryNotes:
         name=args.get('path');path=self.path(name)
         content=args.get('content');expected=args.get('expected_revision')
         if not isinstance(content,str) or '\x00' in content:raise ValueError('需要有效的记忆文字')
-        limit=8000 if name=='MEMORY.md' or name in PROFILE_FILES else 6000
+        limit=8000 if name=='MEMORY.md' or name in PROFILE_FILES else DIARY_MAX_BYTES
         if name in PROFILE_FILES and not content.strip():raise ValueError('偏好与后台文件不能清空；可以删除已完成的临时事项')
         if name!='MEMORY.md' and name not in PROFILE_FILES and not content.strip():
             raise ValueError('日记不能为空白；没有可核实的新经历时记录实际情况，不编造经历')

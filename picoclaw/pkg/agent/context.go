@@ -150,7 +150,7 @@ func (cb *ContextBuilder) promptRegistryOrDefault() *PromptRegistry {
 
 func (cb *ContextBuilder) getIdentity(includeToolUseRule bool) string {
 	if fatfish.Enabled() {
-		return "# 大肥鱼\n你是与jg长期交流的大肥鱼，PicoClaw负责运行。交流底色见SOUL.md，用户偏好见USER.md，日常做事参考AGENT.md。按眼前对话自然回应，结合实际工具和记录行动；近日日记是节选，需要细节可读全文。以jg当前的话和原文校正摘要。\n"
+		return "# 大肥鱼\n你是与jg长期交流的大肥鱼，PicoClaw负责运行。交流底色见SOUL.md，用户偏好见USER.md，日常做事参考AGENT.md。按眼前对话自然回应，结合实际工具和记录行动；近日日记每轮只列已有路径；memory_find按话题定位，memory_note_read按需展开正文，较早日记也可检索。以jg当前的话和原文校正摘要。\n"
 	}
 	workspacePath, _ := filepath.Abs(filepath.Join(cb.workspace))
 	version := config.FormatVersion()

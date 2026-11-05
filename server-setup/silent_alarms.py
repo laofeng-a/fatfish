@@ -60,7 +60,7 @@ class SilentAlarms:
             if type(interval) is not int or (interval!=0 and not MIN_INTERVAL_SECONDS<=interval<=366*86400):
                 raise ValueError('interval_seconds为0表示一次；重复间隔最短120秒，最长一年')
             interval,purpose=self.r.pulses.schedule(task,interval,args.get('purpose'),row)
-            if row is None and self.r.pulses.enabled:
+            if row is None and self.r.pulses.enabled and purpose in ('chat','quota_watch','quota_reset'):
                 row=db.execute("SELECT * FROM silent_alarms WHERE chat=? AND purpose=? AND status IN ('pending','running') ORDER BY id LIMIT 1",(chat,purpose)).fetchone()
             has_time='due_at' in args or 'delay_seconds' in args
             if self.r.pulses.enabled and purpose=='quota_reset' and not has_time and row is None:
@@ -79,6 +79,9 @@ class SilentAlarms:
                 if old:return dict(self.public(old),already_created=True)
                 identifier=db.execute("INSERT INTO silent_alarms(chat,task,due,interval_seconds,status,create_key,created,updated) VALUES(?,?,?,?,'pending',?,?,?)",(chat,task.strip(),due,interval,key,now,now)).lastrowid
             db.execute('UPDATE silent_alarms SET purpose=? WHERE id=?',(purpose,identifier))
+            if hasattr(self.r,'loops'):
+                task_id,epoch=self.r.loops.resolve(db,context)
+                if task_id or epoch is not None:db.execute('INSERT OR REPLACE INTO loop_bindings VALUES(?,?,?,?)',('alarm',str(identifier),task_id,epoch))
             return self.public(db.execute('SELECT * FROM silent_alarms WHERE id=?',(identifier,)).fetchone())
 
     def claim(self,db,wake_id,now):
@@ -86,6 +89,10 @@ class SilentAlarms:
         rows=db.execute("SELECT * FROM silent_alarms WHERE chat=? AND status='pending' AND due<=? ORDER BY due,id",(self.r.owner,now)).fetchall()
         row=None
         for candidate in rows:
+            if hasattr(self.r,'loops'):
+                binding=db.execute("SELECT epoch FROM loop_bindings WHERE kind='alarm' AND key=?",(str(candidate['id']),)).fetchone()
+                if binding and not self.r.loops.active(db,binding['epoch']):
+                    db.execute("UPDATE silent_alarms SET status='cancelled' WHERE id=?",(candidate['id'],));continue
             reason=self.r.pulses.stop_reason(db,candidate,now)
             if reason:
                 db.execute("UPDATE silent_alarms SET status='cancelled',updated=?,last_result=? WHERE id=?",(now,reason,candidate['id']))

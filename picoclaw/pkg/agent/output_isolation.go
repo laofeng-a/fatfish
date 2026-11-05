@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/fatfish"
@@ -15,6 +16,9 @@ import (
 func internalAutomaticFinal(ctx context.Context, sessionKey, messageID string) bool {
 	if !fatfish.Enabled() {
 		return false
+	}
+	if strings.HasPrefix(sessionKey, "agent:task-") || strings.HasPrefix(sessionKey, "agent:autonomy-") || sessionKey == "agent:quota" {
+		return true
 	}
 	if sessionKey == "heartbeat" || fatfish.IsBackground(ctx) {
 		return true

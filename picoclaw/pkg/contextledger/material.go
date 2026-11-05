@@ -3,6 +3,7 @@ package contextledger
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -11,11 +12,52 @@ import (
 // ModelDialogue uses the same source tuple as Candidate.Quotes, so the model
 // can copy a speaker/turn/text together instead of joining separate fields.
 type ModelDialogue struct {
-	Turn       int64    `json:"turn"`
-	Time       string   `json:"time_utc8"`
-	Dialogue   []Quote  `json:"dialogue"`
-	Reasoning  []string `json:"recorded_thoughts,omitempty"`
-	ToolResult string   `json:"tool_result,omitempty"`
+	Turn       int64            `json:"turn"`
+	Time       string           `json:"time_utc8"`
+	Dialogue   []Quote          `json:"dialogue"`
+	References []ModelReference `json:"read_sources,omitempty"`
+}
+
+type ModelReference struct {
+	Tool    string `json:"tool"`
+	Content string `json:"content"`
+}
+
+// Execution details and reasoning remain in the ledger. Only source-reading
+// results accompany dialogue into the conversational summary, labelled as
+// references rather than newly spoken words or quote evidence.
+func readSources(turn Turn) []ModelReference {
+	allowed := map[string]bool{"history_find": true, "history_expand": true, "memory_note_read": true, "memory_find": true, "conversation_bundle": true, "diary_prepare": true}
+	calls := map[string]string{}
+	var out []ModelReference
+	for _, msg := range turn.Messages {
+		for _, call := range msg.ToolCalls {
+			if call.Function != nil {
+				name := strings.TrimPrefix(call.Function.Name, "mcp_reader_")
+				var args map[string]any
+				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+				if name == "turn_detail" && args["part"] == "dialogue" {
+					name = "history_expand"
+				}
+				if name == "read_file" {
+					path, _ := args["path"].(string)
+					if regexp.MustCompile(`(?:^|/)(?:memory|notes)/\d{6}/\d{8}\.md$`).MatchString(strings.ReplaceAll(path, `\`, "/")) {
+						name = "memory_note_read"
+					}
+				}
+				calls[call.ID] = name
+			}
+		}
+		name := calls[msg.ToolCallID]
+		if msg.Role == "tool" && allowed[name] {
+			content := []rune(msg.Content)
+			if len(content) > 12000 {
+				content = content[:12000]
+			}
+			out = append(out, ModelReference{Tool: name, Content: string(content)})
+		}
+	}
+	return out
 }
 
 type ModelMaterial struct {
@@ -49,8 +91,7 @@ func modelDialogue(turns []Turn, thoughts bool) []ModelDialogue {
 			}
 		}
 		if thoughts {
-			t.Reasoning = turn.Reasoning
-			t.ToolResult = turn.ToolBrief
+			t.References = readSources(turn)
 		}
 		out = append(out, t)
 	}

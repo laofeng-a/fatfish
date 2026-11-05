@@ -132,6 +132,17 @@ toolLoop:
 
 		toolName := tc.Name
 		toolArgs := cloneStringAnyMap(tc.Arguments)
+		if !fatfishLoopToolAllowed(turnCtx, ts, toolName, toolArgs) {
+			// Keep every requested tool/result pair valid even when revocation
+			// lands between tools. Already completed results remain persisted.
+			denied := providers.Message{Role: "tool", ToolCallID: tc.ID, Content: "本动作未派发：活动已撤销或本任务已关闭汇报；已有执行端继续运行。"}
+			messages = append(messages, denied)
+			if !ts.opts.NoHistory {
+				ts.agent.Sessions.AddFullMessage(ts.sessionKey, denied)
+				ts.recordPersistedMessage(denied)
+			}
+			continue
+		}
 		denyByTurnProfile := func() bool {
 			if turnProfileToolAllowed(ts.profile, toolName) {
 				return false
@@ -526,7 +537,12 @@ toolLoop:
 		toolCallID := tc.ID
 		asyncToolName := toolName
 		asyncCallback := func(_ context.Context, result *tools.ToolResult) {
-			if !result.Silent && result.ForUser != "" {
+			managed := strings.HasPrefix(ts.sessionKey, "agent:task-") || strings.HasPrefix(ts.sessionKey, "agent:autonomy-")
+			if managed && !fatfishLoopActive(context.Background(), ts) {
+				recordInternalFinal(context.Background(), ts.sessionKey, ts.chatID, ts.opts.Dispatch.MessageID(), result.ContentForLLM(), "late_revoked_callback")
+				return
+			}
+			if !managed && !result.Silent && result.ForUser != "" {
 				outCtx, outCancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer outCancel()
 				_ = al.bus.PublishOutbound(outCtx, outboundMessageForTurn(ts, result.ForUser))
@@ -556,11 +572,18 @@ toolLoop:
 			pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer pubCancel()
 			_ = al.bus.PublishInbound(pubCtx, bus.InboundMessage{
+				SessionKey: func() string {
+					if managed {
+						return ts.sessionKey
+					}
+					return ""
+				}(),
 				Context: bus.InboundContext{
-					Channel:  "system",
-					ChatID:   fmt.Sprintf("%s:%s", ts.channel, ts.chatID),
-					ChatType: "direct",
-					SenderID: fmt.Sprintf("async:%s", asyncToolName),
+					Channel:   "system",
+					ChatID:    fmt.Sprintf("%s:%s", ts.channel, ts.chatID),
+					ChatType:  "direct",
+					SenderID:  fmt.Sprintf("async:%s", asyncToolName),
+					MessageID: ts.opts.Dispatch.MessageID(),
 				},
 				Content: content,
 			})
@@ -598,6 +621,9 @@ toolLoop:
 			ts.clearProviderCancel(cancelRead)
 		}
 		toolDuration := time.Since(toolStart)
+		if toolName == "mcp_reader_autonomy" {
+			al.pruneLoopCrons(turnCtx)
+		}
 
 		if ts.hardAbortRequested() {
 			exec.abortedByHardAbort = true

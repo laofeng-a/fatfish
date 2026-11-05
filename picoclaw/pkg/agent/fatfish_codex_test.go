@@ -51,6 +51,16 @@ func codexWakeEvent() fatfish.CodexEvent {
 	return fatfish.CodexEvent{ID: strings.Repeat("a", 24), Claim: strings.Repeat("b", 24), ChatID: "123", ChainID: "chain", JobID: "job", TurnID: "turn", TurnStatus: "completed", Content: "REAL_CODEX_FINAL"}
 }
 
+func TestCodexEventTaskSessionStaysIsolatedFromPrivateChat(t *testing.T) {
+	al := newCodexWakeTestLoop(t, &codexWakeProvider{})
+	event := codexWakeEvent()
+	event.SessionKey = "agent:task-0123456789abcdef01234567"
+	key, _, ok := al.resolveSteeringTarget(fatfishCodexInbound("123", event))
+	if !ok || key != event.SessionKey {
+		t.Fatalf("task receipt routed to %q, ok=%v", key, ok)
+	}
+}
+
 func codexWakeHumanMessage(owner string) bus.InboundMessage {
 	return bus.NormalizeInboundMessage(bus.InboundMessage{
 		Context: bus.InboundContext{Channel: "telegram", ChatID: owner, ChatType: "direct", SenderID: owner, MessageID: "42"},

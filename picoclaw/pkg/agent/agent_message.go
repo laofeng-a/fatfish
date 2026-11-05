@@ -191,6 +191,9 @@ func (al *AgentLoop) processHeartbeat(
 		SessionKey:  "heartbeat",
 		UserMessage: content,
 	}
+	if decision.SessionKey != "" {
+		dispatch.SessionKey = decision.SessionKey
+	}
 	if channel != "" || chatID != "" {
 		dispatch.InboundContext = &bus.InboundContext{
 			Channel:   channel,
@@ -206,7 +209,7 @@ func (al *AgentLoop) processHeartbeat(
 		EnableSummary:        false,
 		SendResponse:         false,
 		SuppressToolFeedback: true,
-		NoHistory:            true, // Don't load session history for heartbeat
+		NoHistory:            !strings.HasPrefix(decision.SessionKey, "agent:task-"), // Tasks retain history; autonomy uses selected continuity notes.
 	})
 }
 
@@ -215,6 +218,9 @@ func (al *AgentLoop) prepareInboundMessageForAgent(
 	msg bus.InboundMessage,
 ) bus.InboundMessage {
 	msg = bus.NormalizeInboundMessage(msg)
+	if fatfish.Enabled() {
+		al.pruneLoopCrons(ctx)
+	}
 
 	var hadAudio bool
 	msg, hadAudio = al.transcribeAudioInMessage(ctx, msg)
@@ -408,16 +414,20 @@ func (al *AgentLoop) processSystemMessage(
 
 	// Use the origin session for context
 	sessionKey := session.BuildMainSessionKey(agent.ID)
+	if strings.HasPrefix(msg.SessionKey, "agent:task-") || strings.HasPrefix(msg.SessionKey, "agent:autonomy-") {
+		sessionKey = msg.SessionKey
+	}
 	dispatch := DispatchRequest{
 		SessionKey:  sessionKey,
 		UserMessage: fmt.Sprintf("[System: %s] %s", msg.SenderID, msg.Content),
 	}
 	if originChannel != "" || originChatID != "" {
 		dispatch.InboundContext = &bus.InboundContext{
-			Channel:  originChannel,
-			ChatID:   originChatID,
-			ChatType: "direct",
-			SenderID: msg.SenderID,
+			Channel:   originChannel,
+			ChatID:    originChatID,
+			ChatType:  "direct",
+			SenderID:  msg.SenderID,
+			MessageID: msg.Context.MessageID,
 		}
 	}
 

@@ -26,6 +26,7 @@ func fatfishCodexInbound(owner string, event fatfish.CodexEvent) bus.InboundMess
 		kind = "Codex查询结果"
 	}
 	return bus.NormalizeInboundMessage(bus.InboundMessage{
+		SessionKey: event.SessionKey,
 		Context: bus.InboundContext{
 			Channel: "telegram", ChatID: owner, ChatType: "direct",
 			// Route into the owner's existing private session even when the

@@ -9,6 +9,7 @@ import secrets
 import time
 import datetime as dt
 from execution_status import receipt_summary
+from autonomy_window import DailyWindow
 from pathlib import PurePosixPath
 
 PATROL_SECONDS=25*60
@@ -44,6 +45,7 @@ def monitor_cancel(text):
 class AgentLoops:
     def __init__(self,runtime):
         self.r=runtime
+        self.daily_window=DailyWindow(runtime.settings.get('autonomy_daily_window'))
         with runtime.db() as db:
             db.executescript('''
             CREATE TABLE IF NOT EXISTS loop_tasks(id TEXT PRIMARY KEY,version INTEGER,data TEXT,monitor INTEGER,report INTEGER,next_due REAL,origin_epoch INTEGER,created REAL,updated REAL);
@@ -108,6 +110,7 @@ class AgentLoops:
         return bool(state['enabled'] and epoch==state['epoch'])
 
     def admitted(self,db,context):
+        if hasattr(self.r,'companion')and self.r.companion.turn_blocked(db,context):return False
         task,epoch=self.resolve(db,context);human=self.source(db,context)
         row=db.execute('SELECT data,monitor FROM loop_tasks WHERE id=?',(task,)).fetchone() if task else None
         if row:
@@ -374,17 +377,18 @@ class AgentLoops:
                     if when.tzinfo is None:raise ValueError('due_at需要时区')
                     due=when.timestamp()
                     if due<=time.time():raise ValueError('下次唤醒必须晚于现在')
+                due=self.daily_window.constrain(due)
                 db.execute('UPDATE loop_autonomy SET interval_seconds=?,next_due=? WHERE id=1',(interval,due))
             elif action=='skip_next':
                 if not self.active(db,epoch):raise ValueError('自主活动已关闭，恢复由jg决定')
-                db.execute('UPDATE loop_autonomy SET next_due=? WHERE id=1',(max(time.time(),state['next_due'])+state['interval_seconds'],))
+                db.execute('UPDATE loop_autonomy SET next_due=? WHERE id=1',(self.daily_window.constrain(max(time.time(),state['next_due'])+state['interval_seconds']),))
             elif action=='note':
                 if not self.active(db,epoch):raise ValueError('自主活动已关闭')
                 note=str(args.get('note',''))[:3000]
                 db.execute('UPDATE loop_autonomy SET note=? WHERE id=1',(note,))
                 db.execute('INSERT INTO loop_activity(epoch,kind,content,created) VALUES(?,?,?,?)',(state['epoch'],'continuity',note,time.time()))
             elif action!='status':raise ValueError('自主活动操作无效')
-            return dict(db.execute('SELECT * FROM loop_autonomy WHERE id=1').fetchone(),recent=[dict(x) for x in db.execute('SELECT * FROM loop_activity WHERE epoch IS NOT NULL ORDER BY id DESC LIMIT 12')])
+            return dict(db.execute('SELECT * FROM loop_autonomy WHERE id=1').fetchone(),daily_window=self.daily_window.view(),in_daily_window=self.daily_window.contains(time.time()),companion=self.r.companion.status(db)if hasattr(self.r,'companion')else None,recent=[dict(x) for x in db.execute('SELECT * FROM loop_activity WHERE epoch IS NOT NULL ORDER BY id DESC LIMIT 12')])
 
     def switch(self,db,enabled,text,source=None):
         state=db.execute('SELECT * FROM loop_autonomy WHERE id=1').fetchone()
@@ -392,11 +396,12 @@ class AgentLoops:
         if source.get('id') and source['id']<(last.get('source_id') or 0):raise ValueError('自主活动已有jg更新的控制指令，旧轮不能覆盖')
         if source.get('id')==last.get('source_id') and bool(state['enabled'])==enabled:return
         epoch=state['epoch']+1
-        db.execute('UPDATE loop_autonomy SET enabled=?,epoch=?,next_due=? WHERE id=1',(int(enabled),epoch,time.time()+state['interval_seconds']))
+        db.execute('UPDATE loop_autonomy SET enabled=?,epoch=?,next_due=? WHERE id=1',(int(enabled),epoch,self.daily_window.next_slot(time.time(),state['interval_seconds'])))
         self.r._set(db,'loop_autonomy_control',json.dumps({'enabled':enabled,'epoch':epoch,'source_id':source.get('id'),
             'message_id':source.get('msg'),'text':text,'at':time.time()},ensure_ascii=False))
         db.execute('INSERT INTO loop_activity(epoch,kind,content,created) VALUES(?,?,?,?)',(epoch,'enabled' if enabled else 'disabled',text,time.time()))
         if not enabled:
+            if hasattr(self.r,'companion'):self.r.companion.disarm(db,'owner_disabled')
             db.execute('UPDATE loop_tasks SET monitor=0 WHERE origin_epoch IS NOT NULL')
             db.execute("UPDATE silent_alarms SET status='cancelled' WHERE id IN (SELECT key FROM loop_bindings WHERE kind='alarm' AND epoch IS NOT NULL) AND status IN ('pending','running')")
             db.execute("UPDATE reminders SET status='cancelled' WHERE id IN (SELECT key FROM loop_bindings WHERE kind='reminder' AND epoch IS NOT NULL) AND status='pending'")
@@ -508,10 +513,15 @@ class AgentLoops:
             if row:task=row['id'];epoch=row['origin_epoch'];db.execute('UPDATE loop_tasks SET next_due=? WHERE id=?',(now+PATROL_SECONDS,task))
             else:
                 auto=db.execute('SELECT * FROM loop_autonomy WHERE id=1').fetchone()
-                if not auto['enabled'] or auto['next_due']>now:return None
+                if not auto['enabled']:return None
+                if not self.daily_window.contains(now):
+                    db.execute('UPDATE loop_autonomy SET next_due=? WHERE id=1',(self.daily_window.next_slot(now,auto['interval_seconds'],inclusive=True),))
+                    return None
+                if auto['next_due']>now:return None
                 kind='autonomy';epoch=auto['epoch']
-                db.execute('UPDATE loop_autonomy SET next_due=? WHERE id=1',(now+auto['interval_seconds'],))
+                db.execute('UPDATE loop_autonomy SET next_due=? WHERE id=1',(self.daily_window.next_slot(now,auto['interval_seconds']),))
                 extra='自主活动机会：沿兴趣阅读、探索、整理、聊天或安静结束。按需用autonomy调整下次唤醒或保存少量续记；安静一轮后仍有下次机会。持续任务用task_loop登记跟踪。续记：'+auto['note']
+                if self.daily_window.view():extra+='\n当前自由唤醒窗口：'+json.dumps(self.daily_window.view(),ensure_ascii=False)+'；仅在窗口内提供新的自主机会，窗口结束不代表撤销总开关，已开始的工具自然完成。'
                 recent=[dict(r) for r in db.execute("SELECT msg,kind,content,created FROM events WHERE chat=? AND kind IN ('user','assistant') ORDER BY id DESC LIMIT 12",(self.r.owner,))]
                 extra+='\n最近真实往来原话（按时间）：'+json.dumps(list(reversed(recent)),ensure_ascii=False)
                 extra+='\n相关记忆线索：'+self.r.memory_recall.background_context(db,self.r.owner)

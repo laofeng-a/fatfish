@@ -42,6 +42,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/cron"
 	"github.com/sipeed/picoclaw/pkg/devices"
 	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
+	"github.com/sipeed/picoclaw/pkg/fatfish"
 	"github.com/sipeed/picoclaw/pkg/health"
 	"github.com/sipeed/picoclaw/pkg/heartbeat"
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -436,6 +437,7 @@ func setupAndStartServices(
 	)
 	runningServices.HeartbeatService.SetBus(msgBus)
 	runningServices.HeartbeatService.SetHandler(createHeartbeatHandler(agentLoop))
+	configureCompanionWake(runningServices.HeartbeatService)
 	if err = runningServices.HeartbeatService.Start(); err != nil {
 		return nil, fmt.Errorf("error starting heartbeat service: %w", err)
 	}
@@ -684,6 +686,7 @@ func restartServices(
 	)
 	runningServices.HeartbeatService.SetBus(msgBus)
 	runningServices.HeartbeatService.SetHandler(createHeartbeatHandler(al))
+	configureCompanionWake(runningServices.HeartbeatService)
 	if err = runningServices.HeartbeatService.Start(); err != nil {
 		return fmt.Errorf("error restarting heartbeat service: %w", err)
 	}
@@ -863,6 +866,18 @@ func setupCronTool(
 	}
 
 	return cronService, nil
+}
+
+func configureCompanionWake(service *heartbeat.HeartbeatService) {
+	if !fatfish.Enabled() {
+		return
+	}
+	service.SetDueChecker(5*time.Second, func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		decision, err := fatfish.Call(ctx, "chat_due", map[string]any{})
+		return err == nil && decision.ChatDue
+	})
 }
 
 func createHeartbeatHandler(agentLoop *agent.AgentLoop) func(prompt, channel, chatID string) *tools.ToolResult {

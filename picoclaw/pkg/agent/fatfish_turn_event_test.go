@@ -22,6 +22,7 @@ func TestFatfishTurnEventUsesMetadataAndUpdatedSteering(t *testing.T) {
 		{"callback_with_original_human_id", "5622", "async:lookup", "", "tool_callback"},
 		{"executor", "codex-event:abc", "123", "", "executor_receipt"},
 		{"autonomy", "heartbeat:a", "heartbeat", "autonomy", "autonomy"},
+		{"companion", "heartbeat:chat", "heartbeat", "chat", "companion_tick"},
 		{"patrol", "heartbeat:b", "heartbeat", "task", "task_patrol"},
 		{"quota_for_task", "heartbeat:c", "heartbeat", "quota", "quota_reset"},
 		{"diary", "heartbeat:d", "heartbeat", "diary", "diary_maintenance"},

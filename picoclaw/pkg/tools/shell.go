@@ -400,6 +400,7 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string) *ToolResult
 	} else {
 		cmd = exec.CommandContext(cmdCtx, "sh", "-c", command)
 	}
+	cmd.Env = fatfishExecEnv(ctx)
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
@@ -522,6 +523,7 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 	} else {
 		cmd = exec.Command("sh", "-c", command)
 	}
+	cmd.Env = fatfishExecEnv(ctx)
 	if cwd != "" {
 		cmd.Dir = cwd
 	}

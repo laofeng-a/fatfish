@@ -86,11 +86,33 @@ To supplement a task during ordinary chat, reply to a message bound to that task
 
 Autonomous activity and its derived alarms, cron jobs, queued wakeups, and callbacks carry a source epoch. Disabling it cancels pending schedules and stops new actions at the next model-call or individual tool boundary. Late receipts are preserved but cannot restart the disabled activity or send messages. Ordinary chat, independent reminders, and user-assigned tasks retain their own lifecycles. **Already-dispatched autonomous executor jobs keep running**; disabling activity does not send a stop command to Codex or other executors.
 
+An optional deployment setting `autonomy_daily_window`, for example `{"start":"18:00","end":"22:00","utc_offset_minutes":480}`, limits new free-activity wakeups to a daily window. With a 3600-second interval, opportunities fall at 18:00, 19:00, 20:00, and 21:00 UTC+8, then resume the next day at 18:00. Delayed heartbeat claims skip elapsed slots without a catch-up burst. An already-started turn may finish; task patrol and quota watches remain independent. Opening the daily window never re-enables an owner-disabled switch. Status includes the window, whether it is currently open, and the next due time.
+
+Optional `companion_cadence_enabled=true` adds two-minute conversation opportunities through the same autonomous route, sharing persona, tools, and relationship context. A single nullable `next_chat_due` holds the plan: a new human message cancels the old plan and invalidates its generated candidate; a confirmed text, sticker, or image delivery sets the deadline to **120 seconds** after delivery. Claiming the deadline clears it first. A normally completed turn without a send ends this temporary chain; successful delivery schedules another opportunity. The assistant can converse, share, read, explore, organize, or pursue other authorized interests. The chain shares the daily window and master switch with autonomous activity; ending it quietly preserves the default free-activity schedule.
+
+Heartbeat performs a lightweight due check every **5 seconds**, without calling the model when nothing is due. Active human turns and background leases retain the existing scheduler's priority. Before sending, a narrow filter checks background text, message parts, and media captions for known Chinese internal conclusions such as “本轮保持静默” (“this round stays silent”). A match keeps the whole batch internal and ends that turn, without asking the model to rewrite and resend it. Ordinary foreground farewells, quotations, and code discussions remain available; fixed rules do not claim to detect every paraphrase. The emote script uses the same delivery gate and real receipts, preserving selection and usage accounting; unconfirmed sends do not schedule another opportunity.
+
 Task reporting has independent global and per-task switches, enabled by default. Explicit reports may describe blockers, decisions, or completion; disabling reports still allows progress and internal records. Contacting the user and retaining the next wakeup are separate decisions.
 
 Every model call includes a program-generated current-event marker distinguishing human messages, autonomous wakeups, patrols, quota checks, and executor/tool receipts, with the source message ID. Tool continuations retain the true initiating source. The dynamic clock supplies time context, while original dialogue stays unchanged. See the [event-source release record](docs/RELEASE-2026-11-05-TURN-SOURCE.md) for real-input replays and rollback.
 
 Implementation: [task versions, provenance, and wakeup state](server-setup/agent_loops.py), [per-call context assembly and audit](picoclaw/pkg/agent/fatfish_loops.go), [current-event provenance](picoclaw/pkg/agent/fatfish_turn_event.go), [cron provenance and cancellation](picoclaw/pkg/tools/fatfish_loop_cron.go), and [runtime tools and receipt routing](server-setup/runtime_policy.py).
+
+Companion implementation: [shared deadline and delivery state](server-setup/companion_cadence.py), [internal-conclusion filter](server-setup/internal_note_filter.py), [lightweight heartbeat checks](picoclaw/pkg/heartbeat/service.go), and [emote delivery gate and accounting](workspace-tools/emote_send.py).
+
+The program handles timing, source validation, delivery guards, and receipts. The model chooses its activity, whether to speak, and what to say:
+
+```mermaid
+flowchart LR
+    Human[New human message] --> Reset[Cancel old plan and candidate]
+    Sent[Confirmed delivery] --> Due[next_chat_due = delivery time + 120s]
+    Due --> Claim[Due and capacity available: claim and clear]
+    Claim --> Activity[Conversation or autonomous activity]
+    Activity -->|Explicit delivery succeeds| Sent
+    Activity -->|Quiet finish or internal conclusion blocked| Quiet[End temporary chain; retain hourly activity]
+```
+
+`autonomy status` exposes `companion.next_chat_due`. A null value means no temporary conversation plan; it does not mean the autonomy master switch is off. Activity records distinguish `chat_armed`, `chat_claimed`, `chat_finished`, and cancellation reasons. See the [companion release record](docs/RELEASE-2026-11-06-COMPANION-CADENCE.md) for configuration, verification scope, and rollback.
 
 ### 4. Scheduling and delivery: prioritize people, keep internal results quiet
 
@@ -164,7 +186,11 @@ python3 server-setup/test-common-workflows.py
 python3 server-setup/test-tool-efficiency.py
 python3 server-setup/test-agent-loops.py
 python3 server-setup/test-pulse-policy.py
+python3 server-setup/test-autonomy-window.py
+python3 server-setup/test-companion-cadence.py
+python3 server-setup/test-internal-note-filter.py
 python3 workspace-tools/test_emotes.py
+python3 -m unittest discover -s workspace-tools -p 'test_emote_runtime_receipts.py'
 ```
 
 Build the Go gateway and run the Fatfish checks:
@@ -174,6 +200,7 @@ cd picoclaw
 go test -tags goolm,stdjson ./pkg/agent -run TestFatfish -count=1
 go test -tags goolm,stdjson ./pkg/contextledger -count=1
 go test -tags goolm,stdjson ./pkg/tools -run 'Test.*(Fatfish|Cron)' -count=1
+go test -tags goolm,stdjson ./pkg/heartbeat -run 'TestDueChecker' -count=1
 mkdir -p ../build
 go build -tags goolm,stdjson -o ../build/picoclaw ./cmd/picoclaw
 ```

@@ -41,7 +41,10 @@ type HeartbeatService struct {
 	state     *state.Manager
 	handler   HeartbeatHandler
 	interval  time.Duration
+	dueCheck  func() bool
+	dueEvery  time.Duration
 	enabled   bool
+	executing bool
 	mu        sync.RWMutex
 	stopChan  chan struct{}
 }
@@ -77,6 +80,14 @@ func (hs *HeartbeatService) SetHandler(handler HeartbeatHandler) {
 	hs.mu.Lock()
 	defer hs.mu.Unlock()
 	hs.handler = handler
+}
+
+// SetDueChecker adds a cheap opportunity check without changing the normal
+// heartbeat interval. Configure it before Start; a nil checker disables it.
+func (hs *HeartbeatService) SetDueChecker(interval time.Duration, checker func() bool) {
+	hs.mu.Lock()
+	defer hs.mu.Unlock()
+	hs.dueEvery, hs.dueCheck = interval, checker
 }
 
 // Start begins the heartbeat service
@@ -130,35 +141,58 @@ func (hs *HeartbeatService) runLoop(stopChan chan struct{}) {
 	ticker := time.NewTicker(hs.interval)
 	defer ticker.Stop()
 
-	// Run first heartbeat after initial delay
-	time.AfterFunc(time.Second, func() {
-		hs.executeHeartbeat()
-	})
+	// Keep every execution on the same loop, including the initial heartbeat.
+	initial := time.NewTimer(time.Second)
+	defer initial.Stop()
+	hs.mu.RLock()
+	dueEvery, checker := hs.dueEvery, hs.dueCheck
+	hs.mu.RUnlock()
+	var dueTicks <-chan time.Time
+	if dueEvery > 0 && checker != nil {
+		dueTicker := time.NewTicker(dueEvery)
+		defer dueTicker.Stop()
+		dueTicks = dueTicker.C
+	}
 
 	for {
 		select {
 		case <-stopChan:
 			return
+		case <-initial.C:
+			hs.executeHeartbeat()
 		case <-ticker.C:
 			hs.executeHeartbeat()
+		case <-dueTicks:
+			hs.checkDue()
 		}
+	}
+}
+
+func (hs *HeartbeatService) checkDue() {
+	hs.mu.RLock()
+	checker := hs.dueCheck
+	ready := hs.enabled && hs.stopChan != nil && !hs.executing
+	hs.mu.RUnlock()
+	if ready && checker != nil && checker() {
+		hs.executeHeartbeat()
 	}
 }
 
 // executeHeartbeat performs a single heartbeat check
 func (hs *HeartbeatService) executeHeartbeat() {
-	hs.mu.RLock()
-	enabled := hs.enabled
+	hs.mu.Lock()
 	handler := hs.handler
-	if !hs.enabled || hs.stopChan == nil {
-		hs.mu.RUnlock()
+	if !hs.enabled || hs.stopChan == nil || hs.executing {
+		hs.mu.Unlock()
 		return
 	}
-	hs.mu.RUnlock()
-
-	if !enabled {
-		return
-	}
+	hs.executing = true
+	hs.mu.Unlock()
+	defer func() {
+		hs.mu.Lock()
+		hs.executing = false
+		hs.mu.Unlock()
+	}()
 
 	logger.DebugC("heartbeat", "Executing heartbeat")
 

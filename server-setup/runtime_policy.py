@@ -39,6 +39,8 @@ from memory_recall import MemoryRecall,normalized
 from memory_learning import MemoryLearning
 from turn_history import TurnHistory
 from exploration_opportunities import ExplorationOpportunities
+from companion_cadence import CompanionCadence
+from internal_note_filter import internal_note_reason
 
 class TelegramRejected(ValueError):
     rejected=True
@@ -145,9 +147,8 @@ _EXPLICIT_INTERNAL_NOTE_HEADER=re.compile(
     r'(?:\*\*|__)?[ \t]*(?:[:：]|\r?\n|$)')
 
 def _explicit_internal_note(texts,*,enabled=False,background=False,origin=''):
-    """A narrow heading check, not semantic classification of every message."""
-    if enabled is not True or not background or origin!='send_tool':return False
-    return any(isinstance(text,str) and _EXPLICIT_INTERNAL_NOTE_HEADER.match(text) for text in texts)
+    """Known background meta statements are guarded at the actual send gate."""
+    return enabled is True and internal_note_reason(texts,background=background,origin=origin)is not None
 
 
 class Runtime:
@@ -212,6 +213,7 @@ class Runtime:
         self.exploration=ExplorationOpportunities(self)
         self.workflows=CommonWorkflows(self)
         self.loops=AgentLoops(self)
+        self.companion=CompanionCadence(self)
         self.artifacts=TaskArtifacts(self)
 
     @contextmanager
@@ -292,7 +294,9 @@ class Runtime:
             if data.get('reply_to_message_id'):
                 db.execute('INSERT OR REPLACE INTO message_replies VALUES(?,?,?)',(chat,message,str(data['reply_to_message_id'])))
             if chat==self.owner:
-                if is_owner and not data.get('forwarded'):loop_control=self.loops.inbound(db,text,message,str(data.get('reply_to_message_id',''))) or ''
+                if is_owner and not data.get('forwarded'):
+                    loop_control=self.loops.inbound(db,text,message,str(data.get('reply_to_message_id',''))) or ''
+                if is_owner:self.companion.inbound(db,message)
                 self._set(db,'last_user',time.time());self._set(db,'unanswered',0)
                 # Receipt of human speech is not proof that a Go wake ended.
             context=self._group_turn_context(db,chat,message,sender,is_owner,data)
@@ -359,6 +363,10 @@ class Runtime:
             if self._get(db,'paused','0')=='1' or (previous and time.time()-previous['active_at']<900):
                 return {'allowed':True,'skip':True}
             wake_id=secrets.token_hex(12)
+            chat=self.companion.claim(db,wake_id,time.time())
+            if chat:
+                self._set(db,'current_wake',wake_id)
+                return chat
             diary=self.diary.claim(db,wake_id,time.time())
             if diary:
                 db.execute("INSERT INTO wakes(id,created,day,kind) VALUES(?,?,?,'diary')",(wake_id,time.time(),now.date().isoformat()))
@@ -367,6 +375,7 @@ class Runtime:
                 return {'allowed':True,'wake_id':wake_id,'silent':True,'kind':'diary','context':'\n\n'.join(p for p in (self.diary.prompt(diary),review) if p)}
             managed=self.loops.claim(db,wake_id,time.time())
             if managed:
+                if managed.get('kind')=='autonomy':self.companion.capture(db,wake_id,time.time())
                 self._set(db,'current_wake',wake_id)
                 return managed
             if self.pulses.enabled:
@@ -446,13 +455,14 @@ class Runtime:
         chat=str(data.get('chat_id','')).split('/',1)[0]
         kind=data.get('kind','text');content=str(data.get('content',''))
         mode=data.get('mode','active');now=dt.datetime.now(UTC8)
-        texts=[content]
+        texts=[content,str(data.get('caption')or'')]
         for part in data.get('parts') or []:
             if isinstance(part,str):texts.append(part)
             elif isinstance(part,dict):texts.extend(str(part.get(k,'')) for k in ('text','caption','content'))
         text='\n'.join(dict.fromkeys(texts))
         source=str(data.get('message_id') or data.get('turn') or '')
-        background=mode=='background' or data.get('session_key')=='heartbeat' or bool(data.get('background_context')) or source.startswith(('heartbeat:','codex-event:'))
+        session=str(data.get('session_key')or'')
+        background=mode=='background' or session=='heartbeat' or session.startswith(('agent:autonomy-','agent:task-','agent:cron-')) or bool(data.get('background_context')) or source.startswith(('heartbeat:','codex-event:'))
         internal=bool(re.search(r'(?im)^\s*\[?Output history:\s*delivery facts\b',text))
         internal=internal or ('[Delivery receipt:' in text and re.search(r'(?m)^\s*Confirmed sent (?:text|media|attachment):',text) is not None)
         failure=bool(re.search(r'(?im)^\s*(?:Error processing message:|LLM call failed(?: after retries)?:|API request failed:|Traceback \(most recent call last\):)',text))
@@ -460,8 +470,9 @@ class Runtime:
         if not reason and content.strip() in ('HEARTBEAT_OK','NO_REPLY','[NO_REPLY]'):reason='silent_control'
         origin=data.get('delivery_origin','')
         with self.db() as db:
-            gate=self.loops.send_gate(db,data)
+            gate=self.loops.send_gate(db,data)or self.companion.send_gate(db,data)
             task_id,_=self.loops.resolve(db,data)
+            if self.loops.source(db,data).get('id'):background=False
         if origin=='auto_final' and task_id:reason=reason or 'task_final'
         if gate and origin not in ('auto_final','internal_final'):return {'allowed':True,'skip':True,'reason':gate}
         if not reason and _explicit_internal_note(texts,
@@ -471,6 +482,8 @@ class Runtime:
         if not reason and (origin=='internal_final' or (background and origin=='auto_final')):
             reason='internal_final' if origin=='internal_final' else 'background_final'
         if reason:
+            if reason=='explicit_internal_note':
+                with self.db()as db:self.companion.blocked(db,data)
             if task_id and origin=='internal_final':
                 with self.db() as db:db.execute('INSERT INTO loop_task_events(task_id,kind,source,content,created) VALUES(?,?,?,?,?)',(task_id,'internal_final',source,text[:50000],time.time()))
             # Internal output stays inspectable without becoming a Telegram send.
@@ -484,8 +497,8 @@ class Runtime:
             db.execute('BEGIN IMMEDIATE')
             if not re.fullmatch(r'-?[1-9][0-9]{0,19}',chat):return {'allowed':False}
             if data.get('feedback'):return {'allowed':True}
-            wake_id=self._get(db,'current_wake') if mode=='background' else ''
-            if wake_id:db.execute('UPDATE wakes SET contacted=1 WHERE id=?',(wake_id,))
+            wake_id=self.companion.wake_id(data)
+            if not wake_id and mode=='background':wake_id=self._get(db,'current_wake')
             fingerprint=hashlib.sha256(json.dumps({'content':content,'parts':data.get('parts'),'kind':kind,'delivery':data.get('delivery')},ensure_ascii=False,sort_keys=True).encode()).hexdigest()
             turn=str(data.get('turn') or data.get('message_id') or '')
             if turn:
@@ -499,6 +512,7 @@ class Runtime:
             if task_id:db.execute('INSERT OR REPLACE INTO loop_bindings VALUES(?,?,?,?)',('ticket',ticket,task_id,epoch))
             db.execute('INSERT INTO sends(ticket,chat,kind,fingerprint,mode,wake,status,content,created) VALUES(?,?,?,?,?,?,?,?,?)',
                        (ticket,chat,kind,fingerprint,mode,wake_id,'reserved',content[:50000],time.time()))
+            self.companion.reserve(db,ticket,data)
             if turn:
                 db.execute('INSERT OR REPLACE INTO send_turns VALUES(?,?,?,?)',(chat,turn,ticket,time.time()))
                 db.execute('INSERT INTO send_turn_attempts VALUES(?,?,?,?,?)',(chat,turn,fingerprint,ticket,time.time()))
@@ -520,6 +534,11 @@ class Runtime:
                 if content:
                     db.execute('INSERT OR IGNORE INTO events(chat,msg,kind,content,created) VALUES(?,?,?,?,?)',(row['chat'],ids[0] if ids else row['ticket'],'assistant',content,time.time()))
                     if status in ('sent','partial'):self.memory_recall.mark_shared(db,row['chat'],content)
+            if row:
+                current=db.execute('SELECT status,message_ids,wake FROM sends WHERE ticket=?',(row['ticket'],)).fetchone()
+                ids=json.loads(current['message_ids']or'[]')
+                if current['status']in('sent','partial')and ids and current['wake']:db.execute('UPDATE wakes SET contacted=1 WHERE id=?',(current['wake'],))
+                self.companion.complete(db,row['ticket'],current['status'],ids)
         return {'allowed':True}
 
     def delivery_receipt(self,ticket,current_chat=True):
@@ -553,6 +572,13 @@ class Runtime:
         return [{key:row[key] for key in row.keys() if row[key] is not None} for row in rows]
 
     def action(self,name,data):
+        if name=='chat_due':
+            with self.db()as db:
+                due=self.companion.peek(db,time.time())
+                active=db.execute('SELECT 1 FROM wakes WHERE finished=0 AND COALESCE(heartbeat_at,created)>? LIMIT 1',(time.time()-900,)).fetchone()
+                # The gateway checks actual foreground turn state before claiming.
+                # Coalesced input receipts can retain 'received' after chat ended.
+                return {'allowed':True,'chat_due':due and not active}
         if name in ('task_artifact_get','task_artifact_commit'):return self.artifacts.action(name,data)
         if name=='loop_context':return self.loops.request(data)
         if name=='turn_trace':return self.conversations.trace(data)
@@ -598,6 +624,7 @@ class Runtime:
                 self.diary.finish(db,wake_id,data.get('outcome','completed'),data.get('summary',''))
                 self.learning.finish_review(db,wake_id,data.get('outcome','completed'))
                 loop=db.execute('SELECT * FROM loop_wakes WHERE id=?',(wake_id,)).fetchone()
+                self.companion.finish(db,wake_id,data.get('outcome','completed'))
                 if loop:
                     db.execute('INSERT INTO loop_activity(epoch,kind,content,created) VALUES(?,?,?,?)',(loop['epoch'],loop['kind'],str(data.get('summary',''))[:2000],time.time()))
                 db.execute('UPDATE wakes SET finished=1 WHERE id=?',(wake_id,))
@@ -672,6 +699,7 @@ class Runtime:
         if name=='reminder':return self.reminders.call(args,context,chat)
         if name=='silent_alarm':
             if args.get('purpose')=='chat' and args.get('action') in ('create','update'):
+                if self.companion.enabled:return self.companion.legacy_chat_request(args)
                 return self.loops.autonomy({'action':'adjust','interval_seconds':args.get('interval_seconds') or self.settings.get('autonomy_interval_seconds',900)},context,chat)
             return self.silent_alarms.call(args,context,chat)
         if name=='todo':return self.todos.call(args,context,chat,background_mode=background_mode)
@@ -833,6 +861,7 @@ class Runtime:
                     else 'unknown' if any(state in ('unknown','sending') for state in states) else 'rejected')
             # Set aggregate status before constructing the externally visible receipt.
             with self.db() as db:db.execute('UPDATE sends SET status=?,message_ids=? WHERE ticket=?',(status,json.dumps(ids),ticket))
+            self.complete({'ticket':ticket,'status':status,'message_ids':ids})
             receipt=self.delivery_receipt(ticket,target_chat==chat)
             confirmed=receipt['text']
             if receipt.get('media_name'):confirmed+='\n[表情：'+receipt['media_name']+']'

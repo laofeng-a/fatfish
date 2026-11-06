@@ -89,11 +89,33 @@ Telegram 助手与桌面编码工具通过持久化队列协作。SQLite 保存�
 
 “任务结束／剩下的我来／把任务时钟撤了”等明确指令先持久化到控制状态，再进入聊天；派生排程和迟到回调按最新控制版本复核。自主活动的 `delay_seconds / due_at` 只安排下一次机会，`interval_seconds` 调整循环间隔，`disable` 才是总开关。较早真人回合不能覆盖较新的关闭指令。同一任务、同一等待原因的维护检查合并，额度重置仍独立。
 
+服务部署配置可选 `autonomy_daily_window`，例如 `{"start":"18:00","end":"22:00","utc_offset_minutes":480}`。配合 `interval_seconds=3600`，每天在 UTC+8 的 18、19、20、21 点提供自由活动机会，22 点后等待次日 18 点；Heartbeat 延迟领取时跳过错过的后续槽位，不连续补醒。窗口仅限制新的自由唤醒，已开始的一轮自然完成，任务与额度守候独立。每日开窗不会重新开启被用户关闭的总开关。`autonomy status` 同时返回窗口、是否处于窗口和下次时间。
+
+可选 `companion_cadence_enabled=true` 在这条自主活动路线中加入两分钟陪聊机会，共用人格、工具和相处背景。程序只维护一个可空的 `next_chat_due`：收到新的真人消息先撤销旧计划，让旧候选失效；本轮文字、贴纸或图片取得真实发送回执后，再设为发送完成时间加 **120 秒**。到期领取时先清空，正常结束而没有发送就停止这段临时陪聊；发送成功则接着排两分钟。她可以接话、分享，也可以阅读、探索、整理或做其他已授权且自己感兴趣的事。临时陪聊与整点自由活动共用每日窗口和总开关，安静结束只停临时链，默认自由活动机会仍保留。
+
+Heartbeat 每 **5 秒**轻量检查是否到期，未到期不调用模型；已有真人回合或后台租约时等待原调度器让位。发送入口还检查后台正文、分条内容和图片说明中的高置信度内部结论，例如“这一轮不打扰他”“本轮保持静默”：命中后整批留内部，结束本轮，不要求模型改写后重发。普通前台告别、引用及代码讨论保留；固定规则只覆盖明确表述，不承诺识别所有改写。表情脚本也接入同一发送闸门与真实回执，未确认的发送不续排，不破坏原有表情选取和记账规则。
+
 任务汇报有独立总开关及单任务开关，默认开启。开启时可显式报告阻断、决策需求和完成结果；关闭后仍可推进、保存内部记录。是否联系用户与是否保留下次唤醒分别决定。
 
 每次模型调用都有程序生成的当前事件标识，区分真人消息、自主唤醒、任务巡检、额度检查及执行端/工具回执，带来源消息号；同轮工具续接保留真实触发来源。动态时钟仅作时间附注，原始聊天正文保持不变。实际回放与回滚见[来源标识修复记录](docs/RELEASE-2026-11-05-TURN-SOURCE.md)。
 
 实现入口：[任务、来源版本与两类唤醒状态机](server-setup/agent_loops.py)、[逐次模型请求组装与审计](picoclaw/pkg/agent/fatfish_loops.go)、[当前事件来源](picoclaw/pkg/agent/fatfish_turn_event.go)、[cron 来源与撤销](picoclaw/pkg/tools/fatfish_loop_cron.go)、[运行时工具与回执接入](server-setup/runtime_policy.py)。
+
+陪聊入口：[共享截止时间与回执状态机](server-setup/companion_cadence.py)、[内部结论过滤](server-setup/internal_note_filter.py)、[心跳轻量检查](picoclaw/pkg/heartbeat/service.go)、[表情发送闸门与记账](workspace-tools/emote_send.py)。
+
+程序负责计时、来源校验、发送拦截和回执；模型决定这次想做什么、是否开口及表达内容：
+
+```mermaid
+flowchart LR
+    Human[真人新消息] --> Reset[撤销旧计划与旧候选]
+    Sent[真实发送成功] --> Due[next_chat_due = 完成时间 + 120秒]
+    Due --> Claim[到期且执行槽空闲：领取并清空]
+    Claim --> Activity[接话或自主活动]
+    Activity -->|显式发送成功| Sent
+    Activity -->|安静结束或内部结论被拦截| Quiet[临时链结束，整点自由活动保留]
+```
+
+`autonomy status` 可看到 `companion.next_chat_due`；为空表示没有临时陪聊计划，不表示自主活动总开关关闭。运行记录区分 `chat_armed`、`chat_claimed`、`chat_finished` 和取消原因。配置、验收范围与回滚见[两分钟陪聊发布记录](docs/RELEASE-2026-11-06-COMPANION-CADENCE.md)。
 
 ### 4. 前后台调度与投递：真人优先，内部结果保持静默
 
@@ -168,7 +190,11 @@ python3 server-setup/test-common-workflows.py
 python3 server-setup/test-tool-efficiency.py
 python3 server-setup/test-agent-loops.py
 python3 server-setup/test-pulse-policy.py
+python3 server-setup/test-autonomy-window.py
+python3 server-setup/test-companion-cadence.py
+python3 server-setup/test-internal-note-filter.py
 python3 workspace-tools/test_emotes.py
+python3 -m unittest discover -s workspace-tools -p 'test_emote_runtime_receipts.py'
 ```
 
 构建 Go 主程序并运行 Fatfish 相关检查：
@@ -178,6 +204,7 @@ cd picoclaw
 go test -tags goolm,stdjson ./pkg/agent -run TestFatfish -count=1
 go test -tags goolm,stdjson ./pkg/contextledger -count=1
 go test -tags goolm,stdjson ./pkg/tools -run 'Test.*(Fatfish|Cron)' -count=1
+go test -tags goolm,stdjson ./pkg/heartbeat -run 'TestDueChecker' -count=1
 mkdir -p ../build
 go build -tags goolm,stdjson -o ../build/picoclaw ./cmd/picoclaw
 ```

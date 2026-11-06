@@ -53,6 +53,9 @@ func prepareFatfishLoopRequest(ctx context.Context, ts *turnState, exec *turnExe
 		return nil
 	}
 	if !state.Managed {
+		if state.ReceiptRecovery {
+			exec.callMessages = append(exec.callMessages, providers.Message{Role: "system", Content: "本轮承接已完成的执行结果，恢复接收、整理和交付。复用已保存回执；执行端已经做过的工作保持原状态。"})
+		}
 		exec.callMessages = withFatfishTurnEvent(ts, exec.callMessages, state.WakeKind)
 		return nil
 	}
@@ -62,6 +65,7 @@ func prepareFatfishLoopRequest(ctx context.Context, ts *turnState, exec *turnExe
 	if state.TaskID != "" || ts.sessionKey == "agent:quota" {
 		root := filepath.Dir(os.Getenv("FATFISH_STRUCTURED_CORE_FILE"))
 		var canonical strings.Builder
+		canonical.WriteString("# 当前运行环境\n服务器工作区绝对路径：" + ts.workspace + "\n相对文件路径以此工作区为准；执行端PC路径与服务器路径分别核验。\n")
 		for _, p := range []string{filepath.Join(root, "profile", "SOUL.md"), filepath.Join(root, "core.md"), filepath.Join(root, "profile", "AGENT.md")} {
 			raw, e := os.ReadFile(p)
 			if e != nil {
@@ -84,6 +88,9 @@ func prepareFatfishLoopRequest(ctx context.Context, ts *turnState, exec *turnExe
 			messages = messages[exec.currentTurnStart:]
 		}
 		exec.callMessages = loopTaskMessages(messages, canonical.String(), state.Context)
+	}
+	if state.ReceiptRecovery {
+		exec.callMessages = append(exec.callMessages, providers.Message{Role: "system", Content: "本轮承接已完成的执行结果，恢复接收、整理和交付。复用已保存回执；执行端已经做过的工作保持原状态。"})
 	}
 	exec.callMessages = withFatfishTurnEvent(ts, exec.callMessages, state.WakeKind)
 	return nil
@@ -127,9 +134,22 @@ func fatfishLoopToolAllowed(ctx context.Context, ts *turnState, name string, arg
 	if !fatfish.Enabled() || ts.channel != "telegram" {
 		return true
 	}
-	state, err := fatfish.Call(ctx, "loop_context", loopIdentity(ts))
+	identity := loopIdentity(ts)
+	scheduleCron := name == "cron" && (args["action"] == "add" || args["action"] == "update" || args["action"] == "enable")
+	if scheduleCron || ((name == "mcp_reader_silent_alarm" || name == "mcp_reader_reminder") && (args["action"] == "create" || args["action"] == "update")) {
+		if args["purpose"] != "quota_reset" && args["purpose"] != "quota_watch" {
+			identity["intent"] = "schedule"
+		}
+	}
+	state, err := fatfish.Call(ctx, "loop_context", identity)
 	if err != nil {
 		return !strings.HasPrefix(ts.sessionKey, "agent:task-") && !strings.HasPrefix(ts.sessionKey, "agent:autonomy-")
+	}
+	if state.ReceiptRecovery && name == "exec" {
+		command, _ := args["command"].(string)
+		if !strings.Contains(command, "tools/task_artifact.py receive") {
+			return false
+		}
 	}
 	if !state.Managed {
 		return true

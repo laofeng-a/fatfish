@@ -60,6 +60,11 @@ class SilentAlarms:
             if type(interval) is not int or (interval!=0 and not MIN_INTERVAL_SECONDS<=interval<=366*86400):
                 raise ValueError('interval_seconds为0表示一次；重复间隔最短120秒，最长一年')
             interval,purpose=self.r.pulses.schedule(task,interval,args.get('purpose'),row)
+            task_id,epoch=self.r.loops.resolve(db,context) if hasattr(self.r,'loops') else (None,None)
+            if purpose not in ('quota_reset','quota_watch') and hasattr(self.r,'loops') and not self.r.loops.scheduling_allowed(db,context):
+                raise ValueError('该来源的自动盯守已撤销，不能新增或恢复派生闹钟')
+            if row is None and task_id and purpose=='maintenance':
+                row=db.execute("SELECT a.* FROM silent_alarms a JOIN loop_bindings b ON b.kind='alarm' AND b.key=CAST(a.id AS TEXT) WHERE b.task_id=? AND a.purpose='maintenance' AND a.status='pending' ORDER BY due LIMIT 1",(task_id,)).fetchone()
             if row is None and self.r.pulses.enabled and purpose in ('chat','quota_watch','quota_reset'):
                 row=db.execute("SELECT * FROM silent_alarms WHERE chat=? AND purpose=? AND status IN ('pending','running') ORDER BY id LIMIT 1",(chat,purpose)).fetchone()
             has_time='due_at' in args or 'delay_seconds' in args
@@ -90,15 +95,24 @@ class SilentAlarms:
         row=None
         for candidate in rows:
             if hasattr(self.r,'loops'):
-                binding=db.execute("SELECT epoch FROM loop_bindings WHERE kind='alarm' AND key=?",(str(candidate['id']),)).fetchone()
+                binding=db.execute("SELECT epoch,task_id FROM loop_bindings WHERE kind='alarm' AND key=?",(str(candidate['id']),)).fetchone()
                 if binding and not self.r.loops.active(db,binding['epoch']):
                     db.execute("UPDATE silent_alarms SET status='cancelled' WHERE id=?",(candidate['id'],));continue
+                if binding and binding['task_id'] and candidate['purpose'] not in ('quota_reset','quota_watch'):
+                    task=db.execute('SELECT monitor,data FROM loop_tasks WHERE id=?',(binding['task_id'],)).fetchone()
+                    if not task or not task['monitor'] or json.loads(task['data'])['status']!='active':
+                        db.execute("UPDATE silent_alarms SET status='cancelled' WHERE id=?",(candidate['id'],));continue
             reason=self.r.pulses.stop_reason(db,candidate,now)
             if reason:
                 db.execute("UPDATE silent_alarms SET status='cancelled',updated=?,last_result=? WHERE id=?",(now,reason,candidate['id']))
                 continue
             row=candidate;break
         if row is None:return None
+        if hasattr(self.r,'loops') and row['purpose']=='maintenance':
+            binding=db.execute("SELECT task_id FROM loop_bindings WHERE kind='alarm' AND key=?",(str(row['id']),)).fetchone()
+            if binding and binding['task_id']:
+                # This check replaces the next patrol of the same task.
+                db.execute('UPDATE loop_tasks SET next_due=MAX(next_due,?) WHERE id=?',(now+25*60,binding['task_id']))
         db.execute("UPDATE silent_alarms SET status='running',last_started=?,updated=?,run_count=run_count+1 WHERE id=?",(now,now,row['id']))
         db.execute('INSERT INTO silent_alarm_runs(wake_id,alarm_id,started) VALUES(?,?,?)',(wake_id,row['id'],now))
         return row
@@ -120,6 +134,9 @@ class SilentAlarms:
             state='cancelled'
         if state=='running' and self.r.pulses.enabled and row['purpose']=='quota_reset' and outcome!='completed':
             state='error'  # A one-off reset is not a new five-minute retry chain.
+        if state=='running' and outcome!='completed' and row['purpose']=='maintenance':
+            binding=db.execute("SELECT task_id FROM loop_bindings WHERE kind='alarm' AND key=?",(str(row['id']),)).fetchone()
+            if binding and binding['task_id']:state='error' # Existing task patrol handles recovery.
         if state=='running':
             interval=row['interval_seconds']
             if interval:

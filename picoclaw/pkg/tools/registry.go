@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -291,7 +292,8 @@ func (r *ToolRegistry) ExecuteWithContext(
 	if err := validateToolArgs(tool.Parameters(), args); err != nil {
 		logger.WarnCF("tool", "Tool argument validation failed",
 			map[string]any{"tool": name, "error": err.Error()})
-		return ErrorResult(fmt.Sprintf("invalid arguments for tool %q: %s", name, err)).
+		schema, _ := json.Marshal(tool.Parameters())
+		return ErrorResult(fmt.Sprintf("invalid arguments for tool %q: %s\nUse this parameter schema: %s", name, err, schema)).
 			WithError(fmt.Errorf("argument validation failed: %w", err))
 	}
 

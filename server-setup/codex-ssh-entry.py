@@ -5,7 +5,7 @@ No model prompt, command, URL, filesystem path or token is written to logs.
 """
 import json,sys,urllib.request
 
-MAX_LINE=65536
+MAX_LINE=262144
 
 def dispatch(message,opener):
     if not isinstance(message,dict):raise ValueError('Invalid request')

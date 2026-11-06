@@ -18,6 +18,23 @@ type loopCronAuditTransport func(*http.Request) (*http.Response, error)
 
 func (f loopCronAuditTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
+func TestFatfishLegacyCronFinalDoesNotAutoPublish(t *testing.T) {
+	t.Setenv("FATFISH_RUNTIME_TOKEN_FILE", "enabled")
+	executor := &stubJobExecutor{response: "本轮没有打扰jg"}
+	tool := newTestCronToolWithExecutorAndConfig(t, executor, config.DefaultConfig())
+	interval := int64(900000)
+	job, err := tool.cronService.AddJob("旧后台检查", cron.CronSchedule{Kind: "every", EveryMS: &interval}, "检查结果", "telegram", "123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := tool.ExecuteJob(context.Background(), job); got != "ok" {
+		t.Fatal(got)
+	}
+	if executor.publishedResp != "" || !strings.Contains(executor.lastPrompt, "显式调用发送工具") {
+		t.Fatalf("legacy final leaked: %+v", executor)
+	}
+}
+
 func TestFatfishLoopCronLineageQuietFinalAndRevocation(t *testing.T) {
 	token := filepath.Join(t.TempDir(), "token")
 	os.WriteFile(token, []byte("fixture"), 0600)

@@ -36,7 +36,7 @@ func (p *fatfishInterruptProvider) Chat(ctx context.Context, messages []provider
 	if strings.Contains(text, "先查旧话题") && strings.Contains(text, "改聊新话题") {
 		count := 0
 		for _, m := range messages {
-			if m.Role == "user" && m.Content == "改聊新话题" {
+			if m.Role == "user" && strings.Contains(m.Content, "改聊新话题") {
 				count++
 			}
 		}

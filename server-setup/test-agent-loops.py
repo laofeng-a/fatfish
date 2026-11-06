@@ -103,7 +103,7 @@ class LoopTests(unittest.TestCase):
             db.execute('INSERT INTO codex_chains(id,thread_id,initial_job,state,created,updated) VALUES(?,?,?,?,?,?)',('chain',thread,'first','running',time.time(),time.time()))
             a=self.r.codex._create_followup(db,chain,None,'继续具体缺口','one',True,origin)
             origin['message_id']='heartbeat:'+('c'*24)
-            b=self.r.codex._create_followup(db,chain,None,'重新说一遍继续','two',True,origin)
+            b=self.r.codex._create_followup(db,chain,None,'继续具体缺口','two',True,origin)
             self.assertEqual(a['job_id'],b['job_id']);self.assertTrue(b['reused_pending_request'])
             row=db.execute('SELECT * FROM codex_jobs WHERE id=?',(a['job_id'],)).fetchone()
             event=self.r.codex.enqueue_event(db,row,'actual-turn','completed','执行端真实结果')

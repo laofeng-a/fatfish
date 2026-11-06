@@ -49,6 +49,41 @@ class WorkerTests(unittest.TestCase):
         app=self.app();app.rpc.return_value={'data':[{'id':'thread','name':'test','cwd':'C:/test','status':{'type':'idle'},'secret_extra':'not exported'}]}
         result=app.execute({'action':'list','query':'test'})
         self.assertNotIn('secret_extra',result['threads'][0]);self.assertEqual(app.rpc.call_args.args,('thread/list',{'limit':8,'archived':False,'searchTerm':'test'}))
+    def test_list_includes_all_registered_native_chats_and_removes_duplicates(self):
+        app=self.app();app.routes={
+            'main':{'thread_id':'main','name':'配置大肥鱼','native':True,'shared':True},
+            'second':{'thread_id':'second','name':'配置大肥鱼2','native':True,'shared':True},
+        }
+        def rpc(method,args):
+            if method=='thread/list':return {'data':[{'id':'second','name':'配置大肥鱼2'},{'id':'other','name':'其他'},{'id':'other','name':'其他'}],'nextCursor':'more'}
+            if method=='thread/read':return {'thread':{'id':args['threadId'],'name':'配置大肥鱼','status':{'type':'idle'}}}
+            self.fail(method)
+        app.rpc.side_effect=rpc
+        result=app.execute({'action':'list','query':''})
+        rows={row['id']:row for row in result['threads']}
+        self.assertEqual(len(result['threads']),3)
+        self.assertEqual(set(rows),{'main','second','other'})
+        self.assertTrue(rows['main']['native']);self.assertTrue(rows['second']['native'])
+        self.assertEqual(result['default_thread_id'],'second');self.assertTrue(result['recent_results_have_more'])
+    def test_list_search_includes_matching_registered_native_chats(self):
+        app=self.app();app.routes={
+            'main':{'thread_id':'main','name':'配置大肥鱼','native':True,'shared':True},
+            'second':{'thread_id':'second','name':'配置大肥鱼2','native':True,'shared':True},
+            'third':{'thread_id':'third','name':'其他','native':True,'shared':True},
+        }
+        app.rpc.side_effect=lambda method,args: {'data':[]} if method=='thread/list' else {'thread':{'id':args['threadId'],'name':app.routes[args['threadId']]['name']}}
+        result=app.execute({'action':'list','query':'配置大肥鱼'})
+        self.assertEqual({row['id'] for row in result['threads']},{'main','second'})
+        self.assertEqual([call.args[0] for call in app.rpc.call_args_list],['thread/list','thread/read','thread/read'])
+    def test_list_reports_unavailable_native_without_hiding_other_chats(self):
+        app=self.app();app.routes={'lost':{'thread_id':'lost','name':'旧对话','native':True,'shared':True}}
+        def rpc(method,args):
+            if method=='thread/list':return {'data':[{'id':'other','name':'其他'}]}
+            raise RuntimeError('not found')
+        app.rpc.side_effect=rpc
+        result=app.execute({'action':'list'})
+        self.assertEqual([row['id'] for row in result['threads']],['other'])
+        self.assertEqual(result['unavailable_native_count'],1)
     def test_send_continues_existing_thread_without_permission_changes(self):
         app=self.app();app.routes={'owned-job':{'thread_id':'abc','created_by_fatfish':True}};app.rpc.side_effect=[{'thread':{'id':'abc','status':{'type':'notLoaded'}}},{'thread':{'id':'abc','status':{'type':'idle'}}},{'turn':{'id':'turn1'}}]
         result=app.execute({'action':'send','thread_id':'abc','text':'继续'})

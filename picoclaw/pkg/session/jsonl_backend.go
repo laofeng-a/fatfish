@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"strings"
+	"sync"
 
 	"github.com/sipeed/picoclaw/pkg/memory"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -14,7 +15,8 @@ import (
 // Write errors are logged rather than returned, matching the fire-and-forget
 // contract of SessionManager that the agent loop relies on.
 type JSONLBackend struct {
-	store memory.Store
+	store       memory.Store
+	writeErrors sync.Map
 }
 
 type metaAwareStore interface {
@@ -126,6 +128,7 @@ func (b *JSONLBackend) AddFullMessage(sessionKey string, msg providers.Message) 
 	sessionKey = b.resolveSessionKey(sessionKey)
 	msg = stampMessage(msg)
 	if err := b.store.AddFullMessage(context.Background(), sessionKey, msg); err != nil {
+		b.writeErrors.Store(sessionKey, err)
 		log.Printf("session: add full message: %v", err)
 	}
 }
@@ -153,6 +156,7 @@ func (b *JSONLBackend) GetSummary(key string) string {
 func (b *JSONLBackend) SetSummary(key, summary string) {
 	key = b.resolveSessionKey(key)
 	if err := b.store.SetSummary(context.Background(), key, summary); err != nil {
+		b.writeErrors.Store(key, err)
 		log.Printf("session: set summary: %v", err)
 	}
 }
@@ -160,6 +164,7 @@ func (b *JSONLBackend) SetSummary(key, summary string) {
 func (b *JSONLBackend) SetHistory(key string, history []providers.Message) {
 	key = b.resolveSessionKey(key)
 	if err := b.store.SetHistory(context.Background(), key, history); err != nil {
+		b.writeErrors.Store(key, err)
 		log.Printf("session: set history: %v", err)
 	}
 }
@@ -167,6 +172,7 @@ func (b *JSONLBackend) SetHistory(key string, history []providers.Message) {
 func (b *JSONLBackend) TruncateHistory(key string, keepLast int) {
 	key = b.resolveSessionKey(key)
 	if err := b.store.TruncateHistory(context.Background(), key, keepLast); err != nil {
+		b.writeErrors.Store(key, err)
 		log.Printf("session: truncate history: %v", err)
 	}
 }
@@ -176,6 +182,9 @@ func (b *JSONLBackend) TruncateHistory(key string, keepLast int) {
 // space from logically truncated messages (no-op when there are none).
 func (b *JSONLBackend) Save(key string) error {
 	key = b.resolveSessionKey(key)
+	if err, failed := b.writeErrors.LoadAndDelete(key); failed {
+		return err.(error)
+	}
 	return b.store.Compact(context.Background(), key)
 }
 

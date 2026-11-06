@@ -26,7 +26,7 @@ func (t *CronTool) PruneRevoked(ctx context.Context) {
 		if key == "" {
 			continue
 		}
-		state, err := fatfish.Call(ctx, "loop_context", map[string]any{"session_key": key})
+		state, err := fatfish.Call(ctx, "loop_context", map[string]any{"session_key": key, "intent": "schedule"})
 		if err == nil && state.Managed && !state.Active {
 			t.cronService.RemoveJob(job.ID)
 		}
@@ -47,6 +47,12 @@ func (t *CronTool) stampLoopCron(ctx context.Context, args map[string]any) map[s
 			if job, ok := t.cronService.GetJob(id); ok {
 				key, _ = cronLineage(job.Payload.Message)
 			}
+		}
+	}
+	if key == "" {
+		session := ToolSessionKey(ctx)
+		if strings.HasPrefix(session, "agent:task-") || strings.HasPrefix(session, "agent:autonomy-") {
+			key = session
 		}
 	}
 	if key == "" {

@@ -372,7 +372,8 @@ def serve(settings_path):
             def diagnostic(phase,status=None,kind='',detail=''):
                 safe=str(detail).replace(upstream_key,'[redacted]').replace(local_token,'[redacted]')[:1200]
                 elapsed=int((time.monotonic()-started)*1000)
-                ledger.event(call_id,request_id,phase,status,kind,safe,elapsed)
+                try:ledger.event(call_id,request_id,phase,status,kind,safe,elapsed)
+                except (OSError,sqlite3.Error):pass # A full diagnostic DB must not prevent an HTTP error response.
                 print(json.dumps({'at':dt.datetime.now(UTC8).isoformat(timespec='seconds'),'call_id':call_id,'request_id':request_id,
                                  'phase':phase,'upstream_status':status,'error_class':kind,'detail':safe,'elapsed_ms':elapsed},ensure_ascii=False),flush=True)
             try:
@@ -435,7 +436,10 @@ def serve(settings_path):
                 diagnostic('client_disconnected',kind=type(exc).__name__,detail=str(exc))
             except Exception as exc:
                 diagnostic('upstream_failed_reservation_unresolved' if upstream_attempted else 'gateway_failed',kind=type(exc).__name__,detail=str(exc))
-                self.send_json(502, {'error': {'message':'Model gateway request failed','type':'gateway_error','request_id':request_id}})
+                storage=isinstance(exc,(OSError,sqlite3.Error)) and (getattr(exc,'errno',None)==28 or 'disk is full' in str(exc).lower() or 'no space left' in str(exc).lower())
+                self.send_json(503 if storage else 502, {'error': {'message':'Local storage unavailable' if storage else 'Model gateway request failed',
+                    'type':'local_storage_error' if storage else 'gateway_error','code':'storage_unavailable' if storage else 'gateway_failed',
+                    'request_id':request_id,'upstream_attempted':upstream_attempted,'retryable':False if storage else True}})
 
     # One process, at most two in-flight requests. Ledger transactions retain
     # reservation ordering while a slow summary leaves capacity for chatting.

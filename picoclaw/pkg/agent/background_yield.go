@@ -22,7 +22,7 @@ func (e *backgroundYieldError) Error() string {
 
 func backgroundWantsYield(ctx context.Context, ts *turnState) bool {
 	check, _ := ctx.Value(backgroundYieldKey{}).(func() bool)
-	return ts.sessionKey == "heartbeat" && ts.opts.NoHistory && check != nil && check()
+	return check != nil && check()
 }
 
 // Called only between model/tool batches. Never cancels a dispatched mutation.

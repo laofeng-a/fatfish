@@ -27,7 +27,7 @@ class EntryTests(unittest.TestCase):
         opener.open.assert_not_called()
     def test_oversized_lines_close_without_forwarding(self):
         with patch.object(entry,'dispatch') as dispatch:
-            output=io.StringIO();entry.serve(io.StringIO('a'*65537+'\n'),output)
+            output=io.StringIO();entry.serve(io.StringIO('a'*(entry.MAX_LINE+1)+'\n'),output)
         dispatch.assert_not_called();self.assertEqual(output.getvalue(),'')
     def test_internal_errors_do_not_echo_secrets(self):
         output=io.StringIO()
@@ -62,7 +62,7 @@ class AuthorityTests(unittest.TestCase):
         handler=self.handler()
         for path,key in [('/mcp','worker-key'),('/runtime/inbound','worker-key'),('/bridge','main-key'),('/bridge','')]:
             self.assertEqual(self.post(handler,path,key,{'action':'poll'}),(401,))
-        self.assertEqual(self.post(handler,'/bridge','worker-key',{'action':'poll'}),(200,{'job':None}))
+        self.assertEqual(self.post(handler,'/bridge','worker-key',{'action':'poll'}),(200,{'job':None,'watches':[],'native_watches':[]}))
         result=self.post(handler,'/mcp','main-key',{'jsonrpc':'2.0','id':1,'method':'tools/list'})
         self.assertEqual(result[0],200);self.assertIn('codex',[t['name'] for t in result[1]['result']['tools']])
     def test_unconfigured_bridge_fails_closed(self):

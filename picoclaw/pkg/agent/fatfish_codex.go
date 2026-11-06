@@ -87,6 +87,19 @@ func (al *AgentLoop) processFatfishCodexEvent(ctx context.Context, owner string,
 		release()
 		return
 	}
+	ownerMessage := bus.NormalizeInboundMessage(bus.InboundMessage{
+		Context: bus.InboundContext{Channel: msg.Channel, ChatID: owner, ChatType: "direct", SenderID: owner},
+		Sender:  bus.SenderInfo{Platform: msg.Channel, PlatformID: owner},
+	})
+	ownerSession, _, routable := al.resolveSteeringTarget(ownerMessage)
+	if routable && ownerSession != sessionKey {
+		ownerBusy := func() bool { return al.getActiveTurnState(ownerSession) != nil }
+		if ownerBusy() {
+			release()
+			return
+		}
+		ctx = context.WithValue(ctx, backgroundYieldKey{}, ownerBusy)
+	}
 	placeholder := &turnState{turnID: makePendingTurnID(sessionKey, al.turnSeq.Add(1)), phase: TurnPhaseSetup}
 	if _, busy := al.activeTurnStates.LoadOrStore(sessionKey, placeholder); busy {
 		// Codex results wait for the current human turn; they never steer it.
@@ -152,6 +165,10 @@ func (al *AgentLoop) processFatfishCodexEvent(ctx context.Context, owner string,
 	eventCtx := fatfish.WithCodexEvent(ctx, event)
 	response, processErr := al.processMessage(eventCtx, msg)
 	outcome = fatfish.TurnOutcome(response, processErr)
+	var yielded *backgroundYieldError
+	if errors.As(processErr, &yielded) {
+		outcome = "yielded"
+	}
 	if outcome == "no_reply" {
 		outcome = "completed"
 	}

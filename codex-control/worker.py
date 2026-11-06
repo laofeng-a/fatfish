@@ -1,8 +1,11 @@
 """Local Codex controller over a fixed outbound SSH channel; account auth stays local."""
 import argparse,datetime as dt,hashlib,json,math,os,queue,re,shutil,subprocess,threading,time
+import base64
 from pathlib import Path
 
 HIDDEN=getattr(subprocess,'CREATE_NO_WINDOW',0)
+
+class WatcherYield(Exception):pass
 
 def resolve_codex_executable(configured):
     """Recover after a desktop update removes a versioned Codex cache path."""
@@ -211,7 +214,12 @@ class AppServer:
         wanted={str(x) for x in turn_ids if x}
         if not managed or not wanted:return {}
         try:
-            if thread is None:thread=self.rpc('thread/read',{'threadId':thread_id})['thread']
+            if thread is None:
+                thread=getattr(self,'thread_metadata',{}).get(thread_id)
+                if thread is None:
+                    thread=self.rpc('thread/read',{'threadId':thread_id},timeout=8)['thread']
+                    if not hasattr(self,'thread_metadata'):self.thread_metadata={}
+                    self.thread_metadata[thread_id]=thread
             raw=thread.get('path')
             if not isinstance(raw,str):return {}
             # Codex on Windows returns the extended-length local path spelling.
@@ -325,12 +333,13 @@ class AppServer:
         if not hasattr(self,'watcher_observations'):self.watcher_observations={}
         valid=[w for w in watches if isinstance(w,dict) and w.get('job_id') and w.get('thread_id')]
         valid.sort(key=lambda w:self.watcher_seen.get(w['job_id'],0))
-        for watch in valid[:4]:
+        for watch in valid[:1]:
             if getattr(self,'wait_callback',None):self.wait_callback()
             key=watch['job_id']
             if now-self.watcher_seen.get(key,0)<15:continue
             self.watcher_seen[key]=now
             try:result=self.inspect_submission(watch['thread_id'],watch.get('client_user_message_id'),watch.get('turn_id'))
+            except WatcherYield:raise
             except Exception:continue
             if result.get('terminal_confirmed') is True:
                 events.append(dict(action='completed',job_id=key,thread_id=watch['thread_id'],
@@ -361,7 +370,8 @@ class AppServer:
         events=[];now=time.time()
         if not hasattr(self,'native_watch_seen'):self.native_watch_seen={}
         registered={row['thread_id'] for row in self.routes.values() if row.get('native') and row.get('shared')}
-        for watch in watches[:4]:
+        watches=sorted(watches,key=lambda w:self.native_watch_seen.get(w.get('thread_id'),0))
+        for watch in watches[:1]:
             if getattr(self,'wait_callback',None):self.wait_callback()
             thread=watch.get('thread_id')
             if thread not in registered or now-self.native_watch_seen.get(thread,0)<15:continue
@@ -497,21 +507,36 @@ class AppServer:
             args={'limit':8,'archived':False}
             if job.get('query'):args['searchTerm']=job['query']
             result=self.rpc('thread/list',args)
-            rows=[{key:t.get(key) for key in ('id','name','cwd','status')} for t in result.get('data',[])]
+            rows=[];seen=set()
+            for thread in result.get('data',[]):
+                identifier=thread.get('id')
+                if not identifier or identifier in seen:continue
+                seen.add(identifier)
+                rows.append({key:thread.get(key) for key in ('id','name','cwd','status')})
             owned={row['thread_id'] for row in self.routes.values()}
+            native_routes={row['thread_id']:row for row in self.routes.values() if row.get('native') and row.get('shared')}
             for row in rows:
                 if row['id'] in self.routes:
                     row['remote_thread_id']=self.routes[row['id']]['thread_id']
                     row['shared_thread_id']=self.routes[row['id']]['thread_id']
                 if row['id'] in owned:row['remote_controlled']=True
-            native=next((r for r in reversed(list(self.routes.values())) if r.get('native')),None)
-            if native and not job.get('query') and not any(r['id']==native['thread_id'] for r in rows):
-                meta=self.rpc('thread/read',{'threadId':native['thread_id']})['thread']
-                rows.insert(0,{key:meta.get(key) for key in ('id','name','cwd','status')})
-            for row in rows:
-                if native and row['id']==native['thread_id']:
+                if row['id'] in native_routes:
                     row.update(remote_controlled=True,native=True,shared_thread_id=row['id'])
-            return {'threads':rows,'default_thread_id':native['thread_id'] if native else None}
+            native=next((r for r in reversed(list(self.routes.values())) if r.get('native')),None)
+            query=str(job.get('query') or '').strip().casefold()
+            missing=[];unavailable=0
+            for identifier,route in reversed(list(native_routes.items())):
+                if identifier in seen:continue
+                if query and query not in str(route.get('name') or '').casefold() and query not in identifier.casefold():continue
+                try:meta=self.rpc('thread/read',{'threadId':identifier})['thread']
+                except RuntimeError:
+                    unavailable+=1;continue
+                row={key:meta.get(key) for key in ('id','name','cwd','status')}
+                row.update(remote_controlled=True,native=True,shared_thread_id=identifier)
+                missing.append(row);seen.add(identifier)
+            return {'threads':missing+rows,'default_thread_id':native['thread_id'] if native else None,
+                    'recent_results_have_more':bool(result.get('nextCursor')),'unavailable_native_count':unavailable,
+                    'note':'显示最近一页和匹配的已登记原生共用会话；最近一页不代表全部历史。'}
         if action=='probe':
             directory=Path(__file__).resolve().parent/'smoke';directory.mkdir(exist_ok=True)
             thread=self.rpc('thread/start',{'ephemeral':True,'cwd':str(directory),'sandbox':'read-only','approvalPolicy':'never'})['thread']
@@ -519,8 +544,27 @@ class AppServer:
             turn=self.rpc('turn/start',{'threadId':identifier,'input':[{'type':'text','text':'连接验收。只回复“连接成功”，不要调用任何工具，不读写文件。'}]})['turn']
             return {'thread_id':identifier,'turn_id':turn['id'],'ephemeral':True,'state':'submitted'}
         requested=job['thread_id'];identifier=requested
-        if action in ('read','send','stop'):identifier=self.routes.get(requested,{}).get('thread_id',requested)
+        if action in ('read','send','stop','artifact'):identifier=self.routes.get(requested,{}).get('thread_id',requested)
         thread=self.rpc('thread/read',{'threadId':identifier})['thread']
+        if not hasattr(self,'thread_metadata'):self.thread_metadata={}
+        self.thread_metadata[identifier]=thread
+        if action=='artifact':
+            root=Path(thread.get('cwd') or '').resolve();path=Path(str(job.get('path','')))
+            if not path.is_absolute():path=root/path
+            path=path.resolve()
+            if not path.is_relative_to(root) or not path.is_file():raise ValueError('artifact需要当前会话目录内的真实文件')
+            if path.stat().st_size>128*1024:raise ValueError('artifact最多128KiB')
+            raw=path.read_bytes()
+            return {'thread_id':identifier,'path':str(path),'bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest(),
+                'content_base64':base64.b64encode(raw).decode()}
+        if action=='read' and job.get('detail')=='status':
+            result={'thread_id':identifier,'name':thread.get('name'),'cwd':thread.get('cwd'),'status':thread.get('status'),
+                'request_state':'done','observed_at':self.observed_at(),'detail':'status',
+                'note':'轻量读取会话与队列状态；执行终态以桥接账本中的真实turn回执为准，正文需要时使用detail=history。'}
+            page=self.rpc('thread/queue/list',{'threadId':identifier,'limit':50})
+            result['pending_messages']=[{'id':q.get('id'),'client_user_message_id':q.get('clientUserMessageId')}for q in page.get('data',[])]
+            result['more_pending_messages']=bool(page.get('nextCursor'))
+            return result
         if action=='read':
             result=self.rpc('thread/turns/list',{'threadId':identifier,'limit':3,'sortDirection':'desc','itemsView':'full'})
             lifecycle=self.rollout_lifecycle(identifier,[t.get('id') for t in result.get('data',[])],thread)
@@ -547,7 +591,8 @@ class AppServer:
                     message.update(text=full[:cap],truncated=len(full)>cap,original_chars=len(full))
                     remaining-=len(message['text']);bounded[index]=message
                 observation=self.turn_observation(turn,lifecycle.get(turn.get('id')))
-                turns.append(dict(observation,id=turn.get('id'),messages=[bounded[i] for i in sorted(bounded)],
+                user=next((item for item in turn.get('items',[]) if item.get('type')=='userMessage'),{})
+                turns.append(dict(observation,id=turn.get('id'),client_user_message_id=user.get('clientId') or user.get('client_id'),messages=[bounded[i] for i in sorted(bounded)],
                     messages_omitted=len(messages)-len(bounded)))
             result={'thread_id':identifier,'name':thread.get('name'),'cwd':thread.get('cwd'),'status':thread.get('status'),'turns':turns,
                 'request_state':'done','observed_at':self.observed_at(),'task_goal_status':'not_evaluated',
@@ -567,7 +612,7 @@ class AppServer:
         # desktop. Register it before any resume can acquire its writer. Only
         # worker-created/routed conversations keep independent execution.
         owned=identifier in self.active or any(row.get('thread_id')==identifier for row in self.routes.values())
-        if self.writer_strategy=='queue' and not owned:
+        if getattr(self,'writer_strategy','fork')=='queue' and not owned:
             self.attach_shared(requested,thread)
         if action=='stop' and any(row.get('native') and row['thread_id']==identifier for row in self.routes.values()):
             return self.stop_delegated(identifier,job.get('job_id'))
@@ -681,14 +726,16 @@ def poll_background(app,control,post,watches,native_watches):
     last=[0.0]
     def pulse():
         now=time.monotonic()
-        if now-last[0]>=5:
-            post({'action':'poll','protocol_version':5,'active_id':'watcher-heartbeat','claim':''})
+        if now-last[0]>=1:
+            response=post({'action':'poll','protocol_version':5,'active_id':'watcher-heartbeat','claim':''})
+            if response.get('work_waiting') is True:raise WatcherYield()
             last[0]=now
     with control.lock:
         previous=app.wait_callback;app.wait_callback=pulse
         try:
             pulse()
             return app.poll_watchers(watches)+app.poll_native_threads(native_watches)
+        except WatcherYield:return []
         finally:app.wait_callback=previous
 
 def run(config):
@@ -744,9 +791,12 @@ def run(config):
                             # A lost result is never converted into a new task.
                             post(payload)
                         else:time.sleep(1)
-                        pending_events.extend(poll_background(app,control,post,watches,native_watches))
                         response=post({'action':'poll','protocol_version':5})
                         job=response.get('job');watches=response.get('watches',[]);native_watches=response.get('native_watches',[])
+                        if not job:
+                            pending_events.extend(poll_background(app,control,post,watches,native_watches))
+                            response=post({'action':'poll','protocol_version':5})
+                            job=response.get('job');watches=response.get('watches',[]);native_watches=response.get('native_watches',[])
                         state({'online':True,'pid':os.getpid(),'control_page_online':True,'at':time.time()})
                 except Exception as exc:
                     control.bridge_online=False

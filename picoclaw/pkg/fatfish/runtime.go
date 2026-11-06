@@ -15,25 +15,26 @@ import (
 )
 
 type Decision struct {
-	SessionKey string      `json:"session_key"`
-	Managed    bool        `json:"managed"`
-	Report     bool        `json:"report"`
-	Active     bool        `json:"active"`
-	TaskID     string      `json:"task_id"`
-	Version    int         `json:"version"`
-	Allowed    bool        `json:"allowed"`
-	Handled    bool        `json:"handled"`
-	Reply      string      `json:"reply"`
-	Context    string      `json:"context"`
-	WakeID     string      `json:"wake_id"`
-	WakeKind   string      `json:"wake_kind"`
-	Silent     bool        `json:"silent"`
-	Ticket     string      `json:"ticket"`
-	Skip       bool        `json:"skip"`
-	RecordID   int         `json:"record_id"`
-	Accepted   bool        `json:"accepted"`
-	Duplicate  bool        `json:"duplicate"`
-	Event      *CodexEvent `json:"event,omitempty"`
+	SessionKey      string      `json:"session_key"`
+	Managed         bool        `json:"managed"`
+	Report          bool        `json:"report"`
+	Active          bool        `json:"active"`
+	ReceiptRecovery bool        `json:"receipt_recovery,omitempty"`
+	TaskID          string      `json:"task_id"`
+	Version         int         `json:"version"`
+	Allowed         bool        `json:"allowed"`
+	Handled         bool        `json:"handled"`
+	Reply           string      `json:"reply"`
+	Context         string      `json:"context"`
+	WakeID          string      `json:"wake_id"`
+	WakeKind        string      `json:"wake_kind"`
+	Silent          bool        `json:"silent"`
+	Ticket          string      `json:"ticket"`
+	Skip            bool        `json:"skip"`
+	RecordID        int         `json:"record_id"`
+	Accepted        bool        `json:"accepted"`
+	Duplicate       bool        `json:"duplicate"`
+	Event           *CodexEvent `json:"event,omitempty"`
 }
 
 func Enabled() bool { return os.Getenv("FATFISH_RUNTIME_TOKEN_FILE") != "" }

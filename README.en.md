@@ -60,11 +60,13 @@ The Telegram assistant and desktop coding tools communicate through persistent q
 - Existing Codex desktop chats are automatically registered for native sharing. Messages enter the original owner's chat queue, preserving desktop execution ownership and avoiding competing writers. Connector-created independent tasks keep their own execution path.
 - Native queue submissions use stable message identifiers and check for existing entries before enqueueing. Task completion is confirmed against actual turns and completion receipts. Query results and completion events share consumption records to reduce duplicate wakeups.
 - DSH and Claude Code have separate adapters, with their own session, continuation, and receipt semantics.
-- A shared registration and dispatch entry associates `task_id` with complete `thread_id / job_id / turn_id` receipts. Initiation, slow-query results, and completion callbacks resume the stable task context. Existing pending instructions are reused rather than submitting another continuation on every patrol.
+- A shared registration and dispatch entry associates `task_id` with complete `thread_id / job_id / turn_id` receipts. Deduplication compares the exact instruction and requirement version; different follow-ups enter the queue. A new goal owns its task and execution chain while reusing the native chat when appropriate.
+- Request acceptance, execution, receipt processing, and artifact delivery have separate states. Receipt recovery reprocesses existing results without dispatching another executor turn. Default reads fetch lightweight metadata and queue state; `detail=history` expands content.
+- `artifact` retrieves an existing executor file, then `python3 tools/task_artifact.py receive --job JOB_ID --to state/report.md` writes it atomically and records size, SHA-256, and readback verification. File bytes stay outside model context; the per-file limit is 128 KiB.
 
 Connectors add online dependencies and state management, while preserving real desktop project environments and chat context. Uncertain states remain inspectable rather than being reported as completed tasks.
 
-Implementation: [server collaboration queue](server-setup/codex_bridge.py), [native Codex routing](codex-control/worker.py), [DSH connector](codex-control/dsh_connector.py), and [Claude Code connector](codex-control/claude_connector.py).
+Implementation: [server collaboration queue](server-setup/codex_bridge.py), [execution state](server-setup/execution_status.py), [artifact receipts](server-setup/task_artifacts.py), [native Codex routing](codex-control/worker.py), [DSH connector](codex-control/dsh_connector.py), and [Claude Code connector](codex-control/claude_connector.py). See the [runtime recovery release record](docs/RELEASE-2026-11-06-RUNTIME-RECOVERY.md) for cancellation controls, storage repair, deployment evidence, and rollback.
 
 ### 3. Two wakeup classes: continuous tasks and revocable autonomous activity
 
@@ -78,6 +80,10 @@ The existing heartbeat lease and scheduling mechanisms serve three distinct pers
 
 Task goals and effective agreements have sources and versions. Updates affect the corresponding task while earlier instructions remain in history. **Every model call reloads the current task record and canonical SOUL, core, and AGENT execution rules**, without automatically importing unrelated conversation summaries. An audit of the assembled request checks the task ID, version, and content, rather than merely checking stored files.
 
+To supplement a task during ordinary chat, reply to a message bound to that task for direct association. A natural follow-up such as “add a rate-limit section to that report” requires the model to identify the task and call its update or continuation tool. The record preserves the original supplement, source message ID, and a new version. Ambiguous references across multiple tasks require clarification; a conversational acknowledgement alone does not confirm synchronization.
+
+**Updating the task record and notifying the executor are separate steps.** The next task model call reads the new version; an in-flight request is not rewritten. If Codex or another executor is already working, append the supplement to its original chat queue and retain the submission receipt. New instructions and versions can enter the queue while completed work is reused from its receipts.
+
 Autonomous activity and its derived alarms, cron jobs, queued wakeups, and callbacks carry a source epoch. Disabling it cancels pending schedules and stops new actions at the next model-call or individual tool boundary. Late receipts are preserved but cannot restart the disabled activity or send messages. Ordinary chat, independent reminders, and user-assigned tasks retain their own lifecycles. **Already-dispatched autonomous executor jobs keep running**; disabling activity does not send a stop command to Codex or other executors.
 
 Task reporting has independent global and per-task switches, enabled by default. Explicit reports may describe blockers, decisions, or completion; disabling reports still allows progress and internal records. Contacting the user and retaining the next wakeup are separate decisions.
@@ -89,6 +95,16 @@ Implementation: [task versions, provenance, and wakeup state](server-setup/agent
 ### 4. Scheduling and delivery: prioritize people, keep internal results quiet
 
 Programmatic checks, model wakeups, and user-visible messages are separate operations. Timers provide opportunities to act, completion events provide reasons to continue, and the model decides what to do or share.
+
+Events select separate context routes before sharing the model and tool executor:
+
+| Route | Session and continuation material |
+|---|---|
+| Ordinary chat | The routed chat session with normal conversation history, persona, and relevant memory |
+| Task patrol and task receipts | Stable `agent:task-<task_id>` history, with the latest goal, agreements, control state, and actual receipts reloaded for each call |
+| Autonomous activity | `agent:autonomy-<epoch>`, assembled from relationship context, recent exchanges, relevant memory, and a small continuation note |
+
+When a human message arrives, background work saves completed tool results and yields its execution slot at a safe boundary. A later patrol or receipt resumes the original task from its records; continuation is not guaranteed immediately after chat ends. Already-dispatched external work can keep running. The separation covers history, goals, provenance, and delivery paths; tools and the workspace remain shared.
 
 - Background events wait while a human turn is active. Background work can save a checkpoint and yield between model or tool batches when a human message arrives, then continue later. Already-dispatched mutations retain their actual receipts.
 - Programs wait for slow queries and wake the model when results arrive, reducing repeated model-driven status checks.

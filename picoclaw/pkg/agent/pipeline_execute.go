@@ -878,6 +878,7 @@ toolLoop:
 	if exec.allResponsesHandled {
 		if !ts.opts.NoHistory {
 			if err := ts.agent.Sessions.Save(ts.sessionKey); err != nil {
+				exec.persistenceError = err
 				logger.WarnCF("agent", "Failed to save session after tool delivery",
 					map[string]any{
 						"agent_id": ts.agent.ID,

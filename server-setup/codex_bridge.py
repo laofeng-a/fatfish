@@ -1,5 +1,6 @@
 """Owner-private Codex job queue. Worker credential has no runtime/MCP authority."""
 import datetime as dt,hashlib,json,math,re,secrets,time
+from execution_status import normalized_output
 
 def redact(text):
     text=re.sub(r'\b\d{6,14}:[A-Za-z0-9_-]{20,}\b','[凭据已隐藏]',str(text))
@@ -97,6 +98,11 @@ class CodexBridge:
                 if name not in cols:db.execute('ALTER TABLE codex_events ADD COLUMN '+name+' '+kind)
             if 'kind' not in cols:db.execute("ALTER TABLE codex_events ADD COLUMN kind TEXT NOT NULL DEFAULT 'turn'")
             if 'silent' not in cols:db.execute('ALTER TABLE codex_events ADD COLUMN silent INTEGER NOT NULL DEFAULT 0')
+            for name,kind in (('processing_attempts','INTEGER NOT NULL DEFAULT 0'),('recovery','INTEGER NOT NULL DEFAULT 0')):
+                if name not in cols:db.execute('ALTER TABLE codex_events ADD COLUMN '+name+' '+kind)
+            chain_cols={row['name'] for row in db.execute('PRAGMA table_info(codex_chains)')}
+            for name,default in (('execution_state','unknown'),('receipt_state','pending'),('delivery_state','not_verified')):
+                if name not in chain_cols:db.execute('ALTER TABLE codex_chains ADD COLUMN '+name+" TEXT NOT NULL DEFAULT '"+default+"'")
             for row in db.execute("SELECT output FROM codex_jobs WHERE action='send' AND state='done' ORDER BY created DESC LIMIT 40"):
                 try:value=json.loads(row['output'] or '{}')
                 except ValueError:continue
@@ -244,7 +250,7 @@ class CodexBridge:
 
     def query_result_view(self,db,row,context):
         result=self.view(row)
-        if not self.result_dedup or row['action'] not in ('list','read','usage','create') or row['state'] in ('queued','claimed') or not row['output']:return result
+        if not self.result_dedup or row['action'] not in ('list','read','usage','create','artifact') or row['state'] in ('queued','claimed') or not row['output']:return result
         origin=json.loads(row['origin'] or '{}')
         if str(origin.get('chat_id') or self.r.owner)!=str(context.get('chat_id') or self.r.owner):return result
         db.execute('UPDATE codex_jobs SET notify_pending=0 WHERE id=?',(row['id'],))
@@ -274,7 +280,7 @@ class CodexBridge:
                     'cache_state':'registered_binding','note':'这是已登记的共用会话；read可直接省略thread_id，refresh=true可另取完整会话列表。'}
 
     def query_event(self,db,row,output):
-        if row['action'] not in ('list','read','usage','create') or not row['notify_pending']:return None
+        if row['action'] not in ('list','read','usage','create','artifact') or not row['notify_pending']:return None
         event_turn='query-'+row['id']
         old=db.execute('SELECT id FROM codex_events WHERE turn_id=?',(event_turn,)).fetchone()
         if old:return old['id']
@@ -350,8 +356,8 @@ class CodexBridge:
                     (status,content,time.time(),old['id']))
                 event_id=old['id'];inserted=True
         if inserted:
-            db.execute('UPDATE codex_chains SET state="event_pending",last_turn=?,updated=? WHERE id=?',
-                (turn,time.time(),chain_id))
+            db.execute('UPDATE codex_chains SET state="event_pending",execution_state=?,receipt_state="pending",last_turn=?,updated=? WHERE id=?',
+                (status,turn,time.time(),chain_id))
             return event_id
         return db.execute('SELECT id FROM codex_events WHERE turn_id=?',(turn,)).fetchone()['id']
 
@@ -362,14 +368,20 @@ class CodexBridge:
         event_id=message[len(prefix):] if message.startswith(prefix) else ''
         return event_id if re.fullmatch(r'[a-f0-9]{24}',event_id) else None
 
+    def reuse_view(self,row):
+        result=self.view(row);output=normalized_output(json.loads(row['output'] or '{}'))
+        if output.get('terminal_confirmed') is True:
+            return dict(result,reused_completed_result=True,note='同一指令和要求版本已有真实完成回执，复用该结果整理交付；新的补充要求可单独提交。')
+        return dict(result,reused_pending_request=True)
+
     def _create_followup(self,db,chain,event,text,source,auto_reply,origin=None):
-        if hasattr(self.r,'loops'):
-            pending=self.r.loops.pending_request(db,origin or {},getattr(self.r,'backend','codex'),chain['thread_id'])
-            if pending:return dict(self.view(pending),reused_pending_request=True)
         if not isinstance(text,str) or not text.strip() or len(text)>12000:raise ValueError('需要有效的Codex回复文字，最多12000字')
         prefix='[Fatfish 自动回复（不是 jg）]\n' if auto_reply else '[jg 补充]\n'
         clean_text=prefix+text.strip()
         clean={'action':'send','thread_id':chain['thread_id'],'text':clean_text}
+        if hasattr(self.r,'loops'):
+            pending=self.r.loops.pending_request(db,origin or {},getattr(self.r,'backend','codex'),chain['thread_id'],clean,include_completed=True)
+            if pending:return self.reuse_view(pending)
         fingerprint=hashlib.sha256(json.dumps(clean,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
         previous=db.execute('SELECT * FROM codex_jobs WHERE source=? AND fingerprint=?',(source,fingerprint)).fetchone()
         if previous:
@@ -391,7 +403,7 @@ class CodexBridge:
 
     def _close_chain(self,db,chain_id,state):
         now=time.time()
-        db.execute('UPDATE codex_chains SET state=?,updated=? WHERE id=?',(state,now,chain_id))
+        db.execute('UPDATE codex_chains SET state=?,receipt_state="closed",updated=? WHERE id=?',(state,now,chain_id))
         db.execute("UPDATE codex_events SET status='closed' WHERE chain_id=? AND status IN ('pending','claimed','processing','delivered','waiting_user')",(chain_id,))
         # A task closed by the owner/model must not leave an automatic reply queued.
         db.execute("UPDATE codex_jobs SET state='cancelled',updated=? WHERE chain_id=? AND auto_reply=1 AND state='queued'",(now,chain_id))
@@ -407,12 +419,19 @@ class CodexBridge:
                 job=args['job_id']
                 chain=db.execute('SELECT * FROM codex_chains WHERE id=? OR initial_job=? OR id=(SELECT chain_id FROM codex_jobs WHERE id=?)',(job,job,job)).fetchone()
                 event=None
+            task=context.get('task_id')
+            def belongs(candidate):
+                if not candidate or not task:return bool(candidate)
+                binding=db.execute("SELECT task_id FROM loop_bindings WHERE kind=? AND key=?",(getattr(self.r,'backend','codex'),candidate['initial_job'])).fetchone()
+                return bool(binding and binding['task_id']==task)
+            if chain and not belongs(chain):chain=None;event=None
             if action=='continue' and chain:
                 initial=db.execute('SELECT action FROM codex_jobs WHERE id=?',(chain['initial_job'],)).fetchone()
                 if initial and initial['action'] in ('list','read','usage'):chain=None
             thread=self.resolve_thread(db,args,context)
             if thread and (not chain or (args.get('thread_id') and chain['thread_id']!=thread)):
-                chain=db.execute("SELECT c.* FROM codex_chains c JOIN codex_jobs j ON j.id=c.initial_job WHERE c.thread_id=? AND j.action IN ('send','observe') ORDER BY c.updated DESC LIMIT 1",(thread,)).fetchone()
+                candidates=db.execute("SELECT c.* FROM codex_chains c JOIN codex_jobs j ON j.id=c.initial_job WHERE c.thread_id=? AND j.action IN ('send','observe') ORDER BY c.updated DESC",(thread,)).fetchall()
+                chain=next((candidate for candidate in candidates if belongs(candidate)),None)
                 event=None
             if not chain:
                 if action=='continue' and thread:
@@ -425,33 +444,44 @@ class CodexBridge:
             if action=='continue':
                 source=str(context.get('message_id') or context.get('session_key') or 'agent')
                 if context.get('session_key')=='heartbeat':source='background:'+str(self.r._get(db,'current_wake') or int(time.time()//300))+':'+source
-                return self._create_followup(db,chain,event,args.get('text'),source,True,context)
+                human=bool(self.r.loops.source(db,context).get('id')) if hasattr(self.r,'loops') else False
+                return self._create_followup(db,chain,event,args.get('text'),source,not human,context)
             if action=='wait_for_jg':
                 db.execute('UPDATE codex_chains SET state="waiting_user",updated=? WHERE id=?',(time.time(),chain['id']))
                 if event:db.execute('UPDATE codex_events SET status="waiting_user" WHERE id=?',(event['id'],))
                 return {'state':'waiting_user','job_id':chain['initial_job']}
             state=args.get('status','completed')
             if state not in ('completed','failed','stopped'):raise ValueError('finish status must be completed, failed, or stopped')
+            if state=='completed' and context.get('task_id') and hasattr(self.r,'loops'):
+                self.r.loops.require_deliveries(db,context['task_id'])
             self._close_chain(db,chain['id'],state)
             return {'state':state,'job_id':chain['initial_job']}
+
+    def receipt_retry(self,db,row,outcome,now):
+        retry=row['processing_attempts']<3
+        status='pending' if retry else 'receipt_failed'
+        delay=60 if row['processing_attempts']<=1 else 300
+        db.execute('UPDATE codex_events SET status=?,outcome=?,recovery=1,claim=NULL,claimed_until=?,delivered=? WHERE id=?',
+            (status,outcome,now+delay if retry else None,now,row['id']))
+        db.execute("UPDATE codex_chains SET receipt_state=?,state=?,updated=? WHERE id=? AND state NOT IN ('completed','failed','stopped','auto_limit')",
+            ('retry_wait' if retry else 'failed','event_pending' if retry else 'needs_review',now,row['chain_id']))
 
     def runtime_action(self,name,data):
         now=time.time()
         if name=='codex_event_poll':
             with self.r.db() as db:
                 db.execute('BEGIN IMMEDIATE')
-                # Once processing began, a crash may follow a real external write. Never replay it.
-                expired=db.execute("SELECT chain_id FROM codex_events WHERE status='processing' AND claimed_until<?",(now,)).fetchall()
-                db.execute("UPDATE codex_events SET status='unknown',outcome='processing_expired' WHERE status='processing' AND claimed_until<?",(now,))
-                for row in expired:
-                    db.execute("UPDATE codex_chains SET state='unknown',updated=? WHERE id=? AND state NOT IN ('completed','failed','stopped','auto_limit')",(now,row['chain_id']))
+                # Recovery processes the stored receipt, with executor mutations
+                # disabled. Losing a handler never rolls execution back to unknown.
+                for row in db.execute("SELECT * FROM codex_events WHERE status='processing' AND claimed_until<?",(now,)).fetchall():
+                    self.receipt_retry(db,row,'processing_expired',now)
                 if self.r._get(db,'paused','0')=='1':return {'event':None}
                 if self.result_dedup:
                     pending=db.execute("SELECT e.id AS event_id,j.* FROM codex_events e JOIN codex_jobs j ON j.id=e.job_id WHERE e.kind='query' AND e.status IN ('pending','claimed')").fetchall()
                     for item in pending:
                         if self.unchanged_background_read(db,item):
                             self.close_query_notification(db,item['event_id'],item['id'],'same_read_result_observed')
-                row=db.execute("SELECT e.*,c.thread_id AS resolved_thread_id FROM codex_events e JOIN codex_chains c ON c.id=e.chain_id WHERE (e.status='pending' OR (e.status='claimed' AND e.claimed_until<?)) AND c.state NOT IN ('completed','failed','stopped','auto_limit','unknown','usage_blocked') ORDER BY e.created LIMIT 1",(now,)).fetchone()
+                row=db.execute("SELECT e.*,c.thread_id AS resolved_thread_id FROM codex_events e JOIN codex_chains c ON c.id=e.chain_id WHERE ((e.status='pending' AND COALESCE(e.claimed_until,0)<=?) OR (e.status='claimed' AND e.claimed_until<?)) AND c.state NOT IN ('completed','failed','stopped','auto_limit','unknown','usage_blocked') ORDER BY e.created LIMIT 1",(now,now)).fetchone()
                 if not row:return {'event':None}
                 route=self.r.loops.event_context(db,getattr(self.r,'backend','codex'),row['job_id']) if hasattr(self.r,'loops') else {}
                 if route.get('revoked') or route.get('archived'):
@@ -471,16 +501,29 @@ class CodexBridge:
                 if row['status']=='processing':return {'accepted':True,'duplicate':True}
                 if row['status']!='claimed' or row['claimed_until']<now:return {'accepted':False}
                 if self.r._get(db,'paused','0')=='1':return {'accepted':False}
-                db.execute("UPDATE codex_events SET status='processing',processing_started=?,claimed_until=? WHERE id=?",(now,now+1800,event_id))
+                route=self.r.loops.event_context(db,getattr(self.r,'backend','codex'),row['job_id']) if hasattr(self.r,'loops') else {}
+                if route.get('revoked') or route.get('archived'):
+                    db.execute("UPDATE codex_events SET status='delivered',outcome='revoked_before_start',delivered=?,claimed_until=NULL WHERE id=?",(now,event_id))
+                    return {'accepted':False}
+                db.execute("UPDATE codex_events SET status='processing',processing_started=?,claimed_until=?,processing_attempts=processing_attempts+1 WHERE id=?",(now,now+1800,event_id))
+                db.execute("UPDATE codex_chains SET receipt_state='processing' WHERE id=?",(row['chain_id'],))
                 return {'accepted':True,'processing_timeout_seconds':1800}
             if name=='codex_event_touch':
                 changed=db.execute("UPDATE codex_events SET claimed_until=? WHERE id=? AND claim=? AND status='processing'",(now+1800,event_id,claim)).rowcount
                 return {'accepted':bool(changed)}
             if name=='codex_event_ack':
                 outcome=data.get('outcome','completed')
-                if outcome not in ('completed','error','interrupted','panicked'):raise ValueError('invalid Codex event outcome')
-                if row['outcome'] is not None:return {'accepted':True,'duplicate':True}
+                if outcome not in ('completed','error','interrupted','panicked','yielded'):raise ValueError('invalid Codex event outcome')
+                if row['outcome'] is not None and row['status'] not in ('processing','claimed'):return {'accepted':True,'duplicate':True}
                 if row['status']=='claimed':return {'accepted':False}
+                if row['status']=='processing' and outcome=='yielded':
+                    db.execute("UPDATE codex_events SET status='pending',outcome=NULL,claim=NULL,claimed_until=? WHERE id=?",(now+15,event_id))
+                    db.execute("UPDATE codex_chains SET receipt_state='waiting_for_chat' WHERE id=?",(row['chain_id'],))
+                    return {'accepted':True,'yielded':True}
+                if row['status']=='processing' and outcome!='completed':
+                    self.receipt_retry(db,row,outcome,now)
+                    return {'accepted':True,'execution_preserved':True,'receipt_recovery':True}
+                db.execute("UPDATE codex_chains SET receipt_state='processed' WHERE id=?",(row['chain_id'],))
                 if row['kind']=='turn' and outcome=='completed':self.remember_native_final(db,row)
                 if row['kind']=='query' and row['status']=='processing':
                     if outcome=='completed':
@@ -492,12 +535,10 @@ class CodexBridge:
                 if row['status']=='processing':
                     # A successful model round without continue/finish/wait is not
                     # a completed delegation. Do not replay possible external writes.
-                    state='needs_review' if outcome=='completed' else 'unknown'
+                    state='needs_review'
                     db.execute('UPDATE codex_events SET status=?,delivered=?,outcome=?,claimed_until=NULL WHERE id=?',(state,now,outcome,event_id))
                     if outcome=='completed':
                         db.execute("UPDATE codex_chains SET state='needs_review',updated=? WHERE id=? AND state NOT IN ('completed','failed','stopped','auto_limit')",(now,row['chain_id']))
-                    else:
-                        db.execute("UPDATE codex_chains SET state='unknown',updated=? WHERE id=? AND state NOT IN ('completed','failed','stopped','auto_limit')",(now,row['chain_id']))
                 elif row['status'] in ('reply_queued','closed','waiting_user','auto_limit','delivered'):
                     # The model may already have decided continue/finish/wait_for_jg in this turn.
                     db.execute('UPDATE codex_events SET delivered=?,outcome=?,claimed_until=NULL WHERE id=?',(now,outcome,event_id))
@@ -561,13 +602,15 @@ class CodexBridge:
             result.update(completion_notification=bool(row['notify_pending'] or row['action']=='send'),
                 note='请求处理中；结果返回后程序会自动接续，可先继续聊天或安静结束。status可按需查看。')
         if row['output']:
-            output=json.loads(row['output'])
+            output=normalized_output(json.loads(row['output']))
             if output.get('state')=='queued_on_owner' and output.get('turn_status') and output.get('terminal_confirmed') is not True:
                 output['reported_turn_status']=output.pop('turn_status')
                 output.update(execution_state='pending_verification',terminal_confirmed=False,task_goal_status='not_evaluated',
                     note='旧快照待核实；用read查看对应回合、最终正文与状态证据。done指本次请求返回。')
             if include_output:result['result']=output
-            else:result.update({key:output[key] for key in ('thread_id','turn_id','turn_status','state') if key in output})
+            else:result.update({key:output[key] for key in ('thread_id','turn_id','turn_status') if key in output})
+            result['execution_state']=output.get('execution_state',output.get('state','unknown'))
+            if 'terminal_confirmed' in output:result['terminal_confirmed']=output['terminal_confirmed']
             if output.get('thread_id'):result['thread_id']=output['thread_id']
             if output.get('turn_id'):result['turn_id']=output['turn_id']
         return result
@@ -584,7 +627,7 @@ class CodexBridge:
                     'supports_independent_remote_session':self.r._get(db,'codex_worker_protocol','1') in ('3','4','5'),
                     'supports_shared_control':self.r._get(db,'codex_worker_protocol','1') in ('4','5'),
                     'supports_native_collaboration':self.r._get(db,'codex_worker_protocol','1')=='5',
-                    'chains':[dict(row) for row in db.execute('SELECT id,thread_id,state,automatic_exchanges,updated FROM codex_chains ORDER BY updated DESC LIMIT 5')],
+                    'chains':[dict(row) for row in db.execute('SELECT id,thread_id,state,execution_state,receipt_state,delivery_state,automatic_exchanges,updated FROM codex_chains ORDER BY updated DESC LIMIT 5')],
                     'jobs':[self.view(r,include_output=False) for r in db.execute('SELECT * FROM codex_jobs ORDER BY created DESC LIMIT 5')],
                     'background_read_only':False,
                     'note':'这是连接、请求与协作台账。任务进展用read核验，额度用usage查询；按本次目标与实际结果继续协作。'}
@@ -592,7 +635,7 @@ class CodexBridge:
             result=self.chain_action(action,args,context)
             if result is not None:return result
             action='send'
-        if action not in ('list','read','send','stop','usage','create'):raise ValueError('action使用status/list/read/create/send/stop/usage/continue/finish/wait_for_jg')
+        if action not in ('list','read','send','stop','usage','create','artifact'):raise ValueError('action使用status/list/read/create/send/stop/usage/continue/finish/wait_for_jg/artifact')
         if action=='usage':
             cached=None if args.get('refresh') else self.cached_usage()
             if cached:return cached
@@ -605,10 +648,18 @@ class CodexBridge:
                     clean[key]=value.strip()
             with self.r.db() as db:reference=self.resolve_thread(db,args,context,remember=False)
             if reference:clean['source_thread_id']=reference
-        if action in ('read','send','stop'):
+        if action in ('read','send','stop','artifact'):
             with self.r.db() as db:identifier=self.resolve_thread(db,args,context)
             if not identifier:raise ValueError('当前尚未绑定Codex会话；可用list选择一次会话或提供thread_id')
             clean['thread_id']=identifier
+        if action=='read' and getattr(self.r,'backend','codex')=='codex':
+            detail=args.get('detail','status')
+            if detail not in ('status','history'):raise ValueError('detail使用status或history')
+            clean['detail']=detail
+        if action=='artifact':
+            path=args.get('path')
+            if not isinstance(path,str) or not path.strip() or len(path)>2048:raise ValueError('artifact需要执行端文件path')
+            clean['path']=path
         if action=='stop' and args.get('job_id'):
             if not isinstance(args['job_id'],str) or not re.fullmatch(r'[a-zA-Z0-9_-]{6,100}',args['job_id']):raise ValueError('job_id格式无效')
             clean['job_id']=args['job_id']
@@ -616,6 +667,9 @@ class CodexBridge:
             text=args.get('text')
             if not isinstance(text,str) or not text.strip() or len(text)>12000:raise ValueError('需要有效的Codex任务文字，最多12000字')
             clean['text']=text
+            with self.r.db() as db:human_source=bool(self.r.loops.source(db,context).get('id')) if hasattr(self.r,'loops') else True
+            if not human_source and not clean['text'].startswith('[Fatfish 自动回复（不是 jg）]'):
+                clean['text']='[Fatfish 自动回复（不是 jg）]\n'+clean['text']
         if action=='list':clean['query']=str(args.get('query',''))[:120]
         source=str(context.get('message_id',''))
         if background:
@@ -635,8 +689,8 @@ class CodexBridge:
         with self.r.db() as db:
             db.execute('BEGIN IMMEDIATE')
             if action=='send' and hasattr(self.r,'loops'):
-                pending=self.r.loops.pending_request(db,context,getattr(self.r,'backend','codex'),clean.get('thread_id'))
-                if pending:return dict(self.view(pending),reused_pending_request=True)
+                pending=self.r.loops.pending_request(db,context,getattr(self.r,'backend','codex'),clean.get('thread_id'),clean,include_completed=True)
+                if pending:return self.reuse_view(pending)
             if action in ('list','read') and not args.get('refresh'):
                 cached=self.cached_query(db,clean,context)
                 if cached:return cached
@@ -662,12 +716,13 @@ class CodexBridge:
             db.execute('INSERT INTO codex_jobs(id,source,fingerprint,action,args,state,claim,created,updated,output,chain_id,auto_reply) VALUES(?,?,?,?,?,?,?,?,?,?,?,0)',
                 (identifier,source,fingerprint,action,json.dumps(clean,ensure_ascii=False),'queued','',now,now,'',chain_id))
             db.execute('UPDATE codex_jobs SET origin=? WHERE id=?',(json.dumps(context,ensure_ascii=False),identifier))
+            if action=='send' and not human_source:db.execute('UPDATE codex_jobs SET auto_reply=1 WHERE id=?',(identifier,))
             if hasattr(self.r,'loops'):self.r.loops.bind_job(db,context,getattr(self.r,'backend','codex'),identifier)
             if chain_id:
                 db.execute('INSERT INTO codex_chains(id,thread_id,initial_job,state,automatic_exchanges,created,updated) VALUES(?,?,?,"queued",0,?,?)',
                     (chain_id,clean['thread_id'],identifier,now,now))
             db.execute("DELETE FROM codex_jobs WHERE state NOT IN ('queued','claimed') AND id NOT IN (SELECT id FROM codex_jobs ORDER BY created DESC LIMIT 200)")
-        for _ in range(5 if action in ('list','read','usage') else 40):
+        for _ in range(5 if action in ('list','read','usage','artifact') else 40):
             time.sleep(.2)
             with self.r.db() as db:row=db.execute('SELECT * FROM codex_jobs WHERE id=?',(identifier,)).fetchone()
             if row['state'] not in ('queued','claimed'):
@@ -675,10 +730,38 @@ class CodexBridge:
         with self.r.db() as db:
             db.execute('BEGIN IMMEDIATE')
             row=db.execute('SELECT * FROM codex_jobs WHERE id=?',(identifier,)).fetchone()
-            if row['state'] in ('queued','claimed') and action in ('list','read','usage','create'):
+            if row['state'] in ('queued','claimed') and action in ('list','read','usage','create','artifact'):
                 db.execute('UPDATE codex_jobs SET notify_pending=1 WHERE id=?',(identifier,))
                 row=db.execute('SELECT * FROM codex_jobs WHERE id=?',(identifier,)).fetchone()
             return self.query_result_view(db,row,context)
+
+    def reconcile_read_result(self,db,output):
+        thread=output.get('thread_id')
+        if not thread:return
+        queue_complete='pending_messages' in output and output.get('more_pending_messages') is False
+        queued={p.get('client_user_message_id') for p in output.get('pending_messages',[])}
+        for job in db.execute("SELECT * FROM codex_jobs WHERE action='send' AND state='done' ORDER BY created DESC LIMIT 80").fetchall():
+            old=json.loads(job['output'] or '{}');args=json.loads(job['args'])
+            if (old.get('thread_id') or args.get('thread_id'))!=thread:continue
+            if old.get('submission_status') in ('superseded','cancelled'):continue
+            current=normalized_output(old)
+            for turn in output.get('turns',[]):
+                matches=(current.get('turn_id') and current['turn_id']==turn.get('id')) or (current.get('client_user_message_id') and current['client_user_message_id']==turn.get('client_user_message_id'))
+                if matches and turn.get('terminal_confirmed') is True:
+                    current.update({k:turn[k] for k in ('execution_state','terminal_confirmed','completion_outcome','observed_at','status_source') if k in turn})
+                    current.update(turn_id=turn['id'],turn_status=turn['status'])
+                    final='\n\n'.join(m.get('text','') for m in turn.get('messages',[]) if m.get('is_final') or m.get('phase')=='final_answer')
+                    if final:current['final']=final[:6000]
+                    current=normalized_output(current)
+                    db.execute('UPDATE codex_chains SET execution_state=?,last_turn=? WHERE id=?',(current.get('execution_state'),turn['id'],job['chain_id']))
+            if queue_complete and current.get('client_user_message_id') and current['client_user_message_id'] not in queued and not current.get('turn_id') and current.get('terminal_confirmed') is not True:
+                current.update(submission_state=current.get('submission_state',current.get('state')),state='unconfirmed',execution_state='unconfirmed',
+                    native_queue_status='absent',requires_reconciliation=True,observed_at=output.get('observed_at'))
+            if current!=old:db.execute('UPDATE codex_jobs SET output=?,updated=? WHERE id=?',(json.dumps(current,ensure_ascii=False),time.time(),job['id']))
+        latest=db.execute("SELECT output FROM codex_jobs WHERE action='send' AND state='done' AND json_extract(args,'$.thread_id')=? ORDER BY created DESC LIMIT 1",(thread,)).fetchone()
+        if latest:
+            value=normalized_output(json.loads(latest['output'] or '{}'))
+            output['last_execution']={k:value[k] for k in ('turn_id','execution_state','terminal_confirmed','completion_outcome','observed_at') if k in value}
 
     def worker(self,data):
         action=data.get('action');now=time.time()
@@ -691,7 +774,8 @@ class CodexBridge:
                 native_watches=[dict(row) for row in db.execute('SELECT thread_id,cursor_turn_id FROM codex_native_threads ORDER BY created DESC LIMIT 4')]
                 if data.get('active_id'):
                     db.execute("UPDATE codex_jobs SET updated=? WHERE id=? AND claim=? AND state='claimed'",(now,data['active_id'],data.get('claim','')))
-                    return {'job':None,'watches':watches,'native_watches':native_watches}
+                    waiting=bool(db.execute("SELECT 1 FROM codex_jobs WHERE state='queued' LIMIT 1").fetchone())
+                    return {'job':None,'watches':watches,'native_watches':native_watches,'work_waiting':waiting}
                 db.execute("UPDATE codex_jobs SET state='unknown',output=? WHERE state='claimed' AND updated<?",(json.dumps({'note':'连接中断，执行结果不明；未自动重发'}),now-90))
                 row=db.execute("SELECT * FROM codex_jobs WHERE state='queued' ORDER BY created LIMIT 1").fetchone()
                 if not row:return {'job':None,'watches':watches,'native_watches':native_watches}
@@ -704,6 +788,9 @@ class CodexBridge:
             with self.r.db() as db:
                 row=db.execute('SELECT * FROM codex_jobs WHERE id=? AND claim=?',(data.get('id'),data.get('claim'))).fetchone()
                 if not row or row['state']!='claimed':return {'accepted':False}
+                if row['action']=='artifact' and not data.get('error'):
+                    output=self.r.artifacts.ingest(db,row,output)
+                if row['action']=='read' and not data.get('error'):self.reconcile_read_result(db,output)
                 if row['action']=='usage':
                     if data.get('error'):
                         output={'error':'Codex usage query failed'}
@@ -730,6 +817,7 @@ class CodexBridge:
                         except Exception:output.pop('usage',None)
                     if row['action']=='send' and output.get('state')=='usage_blocked':
                         db.execute('UPDATE codex_chains SET state="usage_blocked",updated=? WHERE id=?',(now,row['chain_id']))
+                output=normalized_output(output)
                 encoded=json.dumps(output,ensure_ascii=False)
                 if len(encoded.encode())>32000:raise ValueError('worker结果超过长度上限')
                 db.execute('UPDATE codex_jobs SET state=?,updated=?,output=? WHERE id=?',('error' if data.get('error') else 'done',now,encoded,row['id']))
@@ -739,8 +827,8 @@ class CodexBridge:
                     db.execute('INSERT OR REPLACE INTO codex_thread_bindings VALUES(?,?,?)',(scope,output['thread_id'],now))
                     db.execute('DELETE FROM codex_query_cache WHERE cache_key=?',(self.query_key({'action':'list','query':''}),))
                 query_event=None
-                if row['action'] in ('list','read','usage','create'):
-                    if not data.get('error'):
+                if row['action'] in ('list','read','usage','create','artifact'):
+                    if not data.get('error') and row['action']!='artifact':
                         db.execute('INSERT OR REPLACE INTO codex_query_cache(cache_key,payload,created) VALUES(?,?,?)',(self.query_key(json.loads(row['args'])),encoded,now))
                         if self.result_dedup:
                             db.execute('INSERT OR REPLACE INTO codex_query_cache_jobs VALUES(?,?)',(self.query_key(json.loads(row['args'])),row['id']))
@@ -765,7 +853,7 @@ class CodexBridge:
                 row=db.execute("SELECT * FROM codex_jobs WHERE id=? AND action='send' AND state='done'",(job,)).fetchone()
                 if not row:return {'accepted':False}
                 result=json.loads(row['output'] or '{}')
-                if result.get('state')!='queued_on_owner' or result.get('terminal_confirmed') is True:return {'accepted':False}
+                if result.get('terminal_confirmed') is True or (result.get('state') not in ('queued_on_owner','running','unconfirmed') and result.get('submission_state')!='queued_on_owner'):return {'accepted':False}
                 if not turn or (result.get('turn_id')!=turn and (not client_id or result.get('client_user_message_id')!=client_id)):
                     return {'accepted':False}
                 chain=db.execute('SELECT state FROM codex_chains WHERE id=?',(row['chain_id'],)).fetchone()
@@ -774,6 +862,7 @@ class CodexBridge:
                 if old:result['reported_turn_status']=old;result.pop('final',None)
                 result.update(turn_id=turn,execution_state=data['execution_state'],terminal_confirmed=False,
                     status_source=str(data.get('status_source',''))[:80],observed_at=data.get('observed_at'),task_goal_status='not_evaluated')
+                result=normalized_output(result)
                 db.execute('UPDATE codex_jobs SET updated=?,output=? WHERE id=?',(now,json.dumps(result,ensure_ascii=False),job))
                 self.invalidate_read_cache(db,result.get('thread_id') or json.loads(row['args']).get('thread_id'))
                 if old:
@@ -791,16 +880,18 @@ class CodexBridge:
                 row=db.execute("SELECT * FROM codex_jobs WHERE id=? AND action IN ('send','probe')",(job,)).fetchone()
                 if not row or row['state']!='done':return {'accepted':False}
                 result=json.loads(row['output'] or '{}')
-                if result.get('state')=='queued_on_owner' and data.get('terminal_confirmed') is not True:
+                if (result.get('state')=='queued_on_owner' or result.get('submission_state')=='queued_on_owner') and data.get('terminal_confirmed') is not True:
                     return {'accepted':False,'reason':'native_terminal_not_confirmed'}
                 client_id=str(data.get('client_user_message_id',''))
                 if result.get('turn_id')!=turn and (not client_id or result.get('client_user_message_id')!=client_id):return {'accepted':False}
                 fresh=db.execute('INSERT OR IGNORE INTO codex_completions VALUES(?,?,?)',(turn,job,now)).rowcount
-                result.update(turn_status=str(data.get('status','unknown'))[:40],final=redact(data.get('text',''))[:6000])
+                result.update(turn_id=turn,turn_status=str(data.get('status','unknown'))[:40],final=redact(data.get('text',''))[:6000])
                 for key in ('terminal_confirmed','status_source','observed_at','phase','final_truncated','task_goal_status',
                             'execution_state','completion_outcome','reply_present','error'):
                     if key in data:result[key]=data[key]
+                result=normalized_output(result)
                 db.execute('UPDATE codex_jobs SET updated=?,output=? WHERE id=?',(now,json.dumps(result,ensure_ascii=False),job))
+                db.execute('UPDATE codex_chains SET execution_state=?,last_turn=?,updated=? WHERE id=?',(result.get('execution_state',data['status']),turn,now,row['chain_id']))
                 self.invalidate_read_cache(db,result.get('thread_id') or json.loads(row['args']).get('thread_id'))
                 db.execute('DELETE FROM codex_completions WHERE created<?',(now-30*86400,))
                 event_id=None

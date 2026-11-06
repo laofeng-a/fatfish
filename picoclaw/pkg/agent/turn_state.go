@@ -143,6 +143,8 @@ type turnExecution struct {
 	suppressReasoning   bool
 	callMessages        []providers.Message
 	providerToolDefs    []providers.ToolDefinition
+	visibleToolDefs     map[string]providers.ToolDefinition
+	persistenceError    error
 	llmModel            string
 	llmModelName        string
 	llmOpts             map[string]any

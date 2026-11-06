@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -38,6 +39,25 @@ func (p *Pipeline) CallLLM(
 	// PreLLM: graceful terminal handling
 	exec.gracefulTerminal, _ = ts.gracefulInterruptRequested()
 	exec.providerToolDefs = ts.agent.Tools.ToProviderDefs()
+	// Keep discovered schemas for this turn even when another turn ticks TTL.
+	if exec.visibleToolDefs == nil {
+		exec.visibleToolDefs = make(map[string]providers.ToolDefinition)
+	}
+	currentTools := make(map[string]bool)
+	for _, definition := range exec.providerToolDefs {
+		exec.visibleToolDefs[definition.Function.Name] = definition
+		currentTools[definition.Function.Name] = true
+	}
+	var retainedTools []string
+	for name := range exec.visibleToolDefs {
+		if !currentTools[name] {
+			retainedTools = append(retainedTools, name)
+		}
+	}
+	sort.Strings(retainedTools)
+	for _, name := range retainedTools {
+		exec.providerToolDefs = append(exec.providerToolDefs, exec.visibleToolDefs[name])
+	}
 	exec.providerToolDefs = filterToolsByTurnProfile(exec.providerToolDefs, ts.profile)
 
 	// Native web search support

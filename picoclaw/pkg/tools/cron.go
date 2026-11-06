@@ -597,7 +597,7 @@ func (t *CronTool) enableJob(ctx context.Context, args map[string]any, enable bo
 func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 	managedKey, message := cronLineage(job.Payload.Message)
 	if managedKey != "" && fatfish.Enabled() {
-		state, err := fatfish.Call(ctx, "loop_context", map[string]any{"session_key": managedKey})
+		state, err := fatfish.Call(ctx, "loop_context", map[string]any{"session_key": managedKey, "intent": "schedule"})
 		if err != nil {
 			return "policy unavailable"
 		}
@@ -669,6 +669,12 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 	}
 
 	// Call agent with the job message
+	if fatfish.Enabled() {
+		ctx = fatfish.Background(ctx)
+		if managedKey == "" {
+			message += "\n本次是定时后台机会。最终结论留内部；有需要实际提醒或分享的内容时，显式调用发送工具。"
+		}
+	}
 	response, err := t.executor.ProcessDirectWithChannel(
 		ctx,
 		message,
@@ -680,7 +686,7 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 		return fmt.Sprintf("Error: %v", err)
 	}
 
-	if response != "" && managedKey == "" {
+	if response != "" && managedKey == "" && !fatfish.Enabled() {
 		t.executor.PublishResponseIfNeeded(ctx, channel, chatID, sessionKey, response)
 	}
 	return "ok"

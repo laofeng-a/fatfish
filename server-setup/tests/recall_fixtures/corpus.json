@@ -1,0 +1,191 @@
+{
+  "owner_id": "9001",
+  "other_chat_id": "8002",
+  "events": [
+    {
+      "key": "e_noodle",
+      "chat": "owner",
+      "kind": "user",
+      "msg": "101",
+      "content": "周六晚上想去学校东门那家兰州牛肉面，微辣，不要香菜。"
+    },
+    {
+      "key": "e_noodle_ack",
+      "chat": "owner",
+      "kind": "assistant",
+      "msg": "102",
+      "content": "记下了，东门兰州牛肉面，微辣不要香菜。"
+    },
+    {
+      "key": "e_whale",
+      "chat": "owner",
+      "kind": "user",
+      "msg": "103",
+      "content": "金鱼那次是口误，我说的是鲸鱼，不是宠物。"
+    },
+    {
+      "key": "e_whale_ack",
+      "chat": "owner",
+      "kind": "assistant",
+      "msg": "104",
+      "content": "好，那次是把鲸鱼说成了金鱼。"
+    },
+    {
+      "key": "e_paper",
+      "chat": "owner",
+      "kind": "user",
+      "msg": "105",
+      "content": "论文截止是11月20日，题目是校园路灯的能耗。"
+    },
+    {
+      "key": "e_reading",
+      "chat": "owner",
+      "kind": "reading",
+      "msg": "106",
+      "content": "{\"tool\":\"bilibili_discover\",\"result\":{\"title\":\"猫咪跳水\",\"bvid\":\"BV1catdive01\"}}"
+    },
+    {
+      "key": "e_allergy",
+      "chat": "owner",
+      "kind": "user",
+      "msg": "107",
+      "content": "妈妈过敏，不能吃花生和虾。"
+    },
+    {
+      "key": "e_allergy_ack",
+      "chat": "owner",
+      "kind": "assistant",
+      "msg": "108",
+      "content": "记住，花生和虾都不行。"
+    },
+    {
+      "key": "e_swim",
+      "chat": "owner",
+      "kind": "user",
+      "msg": "109",
+      "content": "下周想学游泳，先从憋气开始。"
+    },
+    {
+      "key": "e_charger",
+      "chat": "owner",
+      "kind": "user",
+      "msg": "110",
+      "content": "把充电器放在蓝色抽屉里了。"
+    },
+    {
+      "key": "e_cilantro",
+      "chat": "owner",
+      "kind": "user",
+      "msg": "111",
+      "content": "香菜炒蛋也好吃，但你不要给我放香菜。"
+    },
+    {
+      "key": "e_tank",
+      "chat": "owner",
+      "kind": "user",
+      "msg": "112",
+      "content": "金鱼缸每周换一次水，上次是周一。"
+    },
+    {
+      "key": "e_run",
+      "chat": "owner",
+      "kind": "user",
+      "msg": "113",
+      "content": "路灯下面等你，夜跑让人放松。"
+    },
+    {
+      "key": "e_group_noodle",
+      "chat": "other",
+      "kind": "user",
+      "msg": "201",
+      "content": "这是另一个群里的兰州牛肉面订单，不要和私聊混在一起。"
+    }
+  ],
+  "memories": [
+    {
+      "key": "m_allergy",
+      "category": "core",
+      "content": "jg对花生和虾过敏。",
+      "quote": "不能吃花生和虾",
+      "source": "e_allergy",
+      "importance": 0.5,
+      "expires_days": 30
+    },
+    {
+      "key": "m_whale",
+      "category": "interaction",
+      "content": "把鲸鱼叫成了金鱼，后来澄清不是宠物。",
+      "quote": "金鱼那次是口误",
+      "source": "e_whale",
+      "importance": 0.5,
+      "expires_days": 30
+    },
+    {
+      "key": "m_noodle",
+      "category": "opinion",
+      "content": "喜欢学校东门的兰州牛肉面，微辣不要香菜。",
+      "quote": "兰州牛肉面，微辣，不要香菜",
+      "source": "e_noodle",
+      "importance": 0.5,
+      "expires_days": 30
+    },
+    {
+      "key": "m_cat",
+      "category": "topic",
+      "content": "想看的视频是猫咪跳水，编号BV1catdive01。",
+      "quote": "猫咪跳水",
+      "source": "e_reading",
+      "importance": 0.5,
+      "expires_days": 30
+    },
+    {
+      "key": "m_charger",
+      "category": "inference",
+      "content": "充电器通常收在蓝色抽屉。",
+      "quote": "充电器放在蓝色抽屉",
+      "source": "e_charger",
+      "importance": 0.5,
+      "expires_days": 30
+    },
+    {
+      "key": "m_tank",
+      "category": "opinion",
+      "content": "金鱼缸每周换一次水。",
+      "quote": "金鱼缸每周换一次水",
+      "source": "e_tank",
+      "importance": 0.5,
+      "expires_days": 30
+    },
+    {
+      "key": "m_run",
+      "category": "interaction",
+      "content": "路灯下夜跑让人放松。",
+      "quote": "夜跑让人放松",
+      "source": "e_run",
+      "importance": 0.5,
+      "expires_days": 30
+    }
+  ],
+  "notes": [
+    {
+      "key": "n_memory",
+      "path": "MEMORY.md",
+      "content": "长期偏好：微辣，香菜不要。花生和虾过敏。"
+    },
+    {
+      "key": "n_whale",
+      "day_offset": -1,
+      "content": "又把鲸鱼说成金鱼，对方笑了。澄清那不是家里的宠物。"
+    },
+    {
+      "key": "n_paper",
+      "day_offset": -3,
+      "content": "晚上去了东门，点了微辣牛肉面，跟店员说不要香菜。聊到论文，路灯能耗那篇还没动笔。"
+    },
+    {
+      "key": "n_tank",
+      "day_offset": -20,
+      "content": "金鱼缸换了水，鱼食还剩半盒。夜跑取消了。"
+    }
+  ]
+}

@@ -10,42 +10,141 @@ import unicodedata
 from urllib.parse import urlsplit
 
 DAY = 86400
-STOP = set('什么 之前 记得 我们 那个 一下 最近 你还 这个 那些 有没有 是不是 现在 以前 一个 的时候 帮我 查查 找找'.split())
+STOP = set('什么 之前 记得 我们 那个 一下 最近 你还 这个 那些 有没有 是不是 现在 以前 一个 的时候 帮我 查查 找找 哪个 怎么 哪里 怎样 为什么'.split())
+# Denial only. "不要香菜" is still about 香菜; "不是宠物" is not evidence of a pet.
+_DENIAL = re.compile(r'(?:并不是|不是|并非)([\u3400-\u9fff]{1,8})')
+_TOKEN = re.compile(r'[a-z0-9_]+|[\u3400-\u9fff]+')
+_BM25_K1 = 1.2
+_BM25_B = 0.75
 
 
 def normalized(text):
     return unicodedata.normalize('NFKC', str(text)).casefold()
 
 
+def _pieces(word):
+    if re.fullmatch(r'[a-z0-9_]+', word) or len(word) <= 2:
+        return [word]
+    return [word[i:i + n] for n in (2, 3) for i in range(len(word) - n + 1)]
+
+
 def terms(query):
-    result = set()
-    for word in re.findall(r'[a-z0-9_]+|[\u3400-\u9fff]+', normalized(query)):
-        if re.fullmatch(r'[a-z0-9_]+', word) or len(word) <= 2:
-            result.add(word)
-        else:
-            result.update(word[i:i+n] for n in (2, 3) for i in range(len(word)-n+1))
-    return sorted(result - STOP)
+    result = []
+    for word in _TOKEN.findall(normalized(query)):
+        result.extend(piece for piece in _pieces(word) if piece not in STOP)
+    return sorted(set(result))
+
+
+def _denial_spans(text):
+    return [(match.start(1), match.end(1)) for match in _DENIAL.finditer(text)]
+
+
+def _overlaps(start, end, spans):
+    return any(start < stop and end > begin for begin, stop in spans)
+
+
+def document_terms(text):
+    """Positive term counts. Terms inside 不是/并非 are not evidence."""
+    content = normalized(text)
+    spans = _denial_spans(content)
+    counts = collections.Counter()
+    for match in _TOKEN.finditer(content):
+        word, base = match.group(), match.start()
+        for offset, piece in _located_pieces(word):
+            if piece in STOP:
+                continue
+            start = base + offset
+            if _overlaps(start, start + len(piece), spans):
+                continue
+            counts[piece] += 1
+    return counts, max(len(content), 1)
+
+
+def _located_pieces(word):
+    if re.fullmatch(r'[a-z0-9_]+', word) or len(word) <= 2:
+        yield 0, word
+        return
+    for size in (2, 3):
+        for index in range(len(word) - size + 1):
+            yield index, word[index:index + size]
+
+
+def prepare(query, texts):
+    """IDF over the candidate set, ignoring denial spans and absent query pieces."""
+    documents = [document_terms(text) for text in texts]
+    total = len(documents) or 1
+    keys = terms(query)
+    counts = collections.Counter()
+    for frequencies, _length in documents:
+        counts.update(key for key in keys if frequencies[key])
+    idf = {key: math.log(1 + (total - counts[key] + 0.5) / (counts[key] + 0.5)) for key in keys if counts[key]}
+    average = sum(length for _counts, length in documents) / total
+    return idf, average or 1
 
 
 def weights(query, texts):
-    keys = terms(query)
-    counts = collections.Counter()
-    total = 0
-    for text in texts:
-        total += 1
-        content = normalized(text)
-        counts.update(key for key in keys if key in content)
-    # Zero-hit query pieces add no evidence. Rare matching terms outweigh chatter.
-    return {key: 1 + math.log1p(total / counts[key]) for key in keys if counts[key]}
+    """Rare matching terms outweigh chatter. Same IDF map prepare() uses."""
+    return prepare(query, texts)[0]
+
+
+def _middle_only(query, frequencies):
+    """True when the match covers neither end of a longer query.
+
+    "另一个群里的兰州牛肉面订单" overlaps a private noodle note only in the middle.
+    "那家面馆" and "充电头收在哪个抽屉" still touch one end or both.
+    """
+    if not query:
+        return False
+    mask = [False] * len(query)
+    for match in _TOKEN.finditer(query):
+        word, base = match.group(), match.start()
+        for offset, piece in _located_pieces(word):
+            if piece in STOP or not frequencies[piece]:
+                continue
+            for index in range(offset, offset + len(piece)):
+                mask[base + index] = True
+    if not any(mask):
+        return False
+    lead = 0
+    while lead < len(mask) and not mask[lead]:
+        lead += 1
+    trail = 0
+    while trail < len(mask) and not mask[-1 - trail]:
+        trail += 1
+    return lead >= 2 and trail >= 2
+
+
+def rank_match(text, query, idf, average_length):
+    """BM25 over CJK bigrams/trigrams and ASCII words, plus exact-phrase containment.
+
+    Full-query containment is reported separately so an exact quote outranks a
+    shorter partial overlap. Recency stays a caller-side tiebreak.
+    """
+    content = normalized(text)
+    folded = normalized(query).strip()
+    exact = bool(folded) and folded in content
+    frequencies, length = document_terms(content)
+    if not exact and _middle_only(folded, frequencies):
+        return False, 0.0, []
+    hits = []
+    score = 0.0
+    for key, weight in idf.items():
+        freq = frequencies[key]
+        if not freq:
+            continue
+        hits.append(key)
+        denominator = freq + _BM25_K1 * (1 - _BM25_B + _BM25_B * length / average_length)
+        score += weight * (freq * (_BM25_K1 + 1)) / denominator
+    if not hits and not exact:
+        return False, 0.0, []
+    return exact, score, hits
 
 
 def relevance(text, query, term_weights):
-    content = normalized(text)
-    hits = [key for key in term_weights if key in content]
-    if not hits:
+    _exact, score, hits = rank_match(text, query, term_weights, max(len(normalized(text)), 1))
+    if not hits and not _exact:
         return 0.0, []
-    score = sum(term_weights[key] for key in hits) / sum(term_weights.values())
-    if normalized(query).strip() and normalized(query).strip() in content:
+    if _exact:
         score += 0.35
     return score, hits
 
@@ -109,17 +208,19 @@ def source_url(text):
 
 def search_notes(notes, query, limit=12):
     documents = [(path, notes.content(path)) for path in notes.files()]
-    scores = weights(query, (text for _, text in documents))
+    idf, average = prepare(query, (text for _, text in documents))
     matches = []
     for order, (path, text) in enumerate(documents):
-        score, hits = relevance(text, query, scores)
-        if not score:
+        exact, score, hits = rank_match(text, query, idf, average)
+        if not score and not exact:
             continue
+        # Exact quotes stay ahead of a shorter partial overlap. File order is the tiebreak.
+        rank = score + (10 if exact else 0)
         folded = normalized(text)
         position = min((folded.find(term) for term in hits), default=0)
         start = max(0, position - 160)
-        matches.append((score, -order, {'path': notes.name(path), 'snippet': text[start:start+1200],
-                                      'revision': notes.revision(text), 'score': round(score, 4)}))
+        matches.append((rank, -order, {'path': notes.name(path), 'snippet': text[start:start+1200],
+                                      'revision': notes.revision(text), 'score': round(rank, 4)}))
     return [item[2] for item in heapq.nlargest(limit, matches, key=lambda item: item[:2])]
 
 
@@ -199,16 +300,21 @@ class MemoryRecall:
                  COALESCE(s.activation,1) AS activation,s.activation_at,
                  COALESCE(s.topic_state,'queued') AS topic_state,s.shared_at
                  FROM memories m LEFT JOIN memory_salience s ON s.memory_id=m.id WHERE ''' + clause
-        scores = weights(query, (row['content'] for row in db.execute(sql, params))) if query else {}
+        rows = [dict(row) for row in db.execute(sql, params)]
+        idf, average = prepare(query, (row['content'] for row in rows)) if query else ({}, 1)
         dated = bool(re.search(r'\d{4}[年/-]|\d{1,2}月', query))
         def ranked():
-            for raw in db.execute(sql, params):
-                row = dict(raw)
-                rel, hits = relevance(row['content'], query, scores) if query else (1.0, [])
-                if not rel:
-                    continue
+            for row in rows:
+                if query:
+                    exact, rel, hits = rank_match(row['content'], query, idf, average)
+                    if not rel and not exact:
+                        continue
+                else:
+                    exact, rel, hits = False, 1.0, []
                 fresh = freshness(row, now)
                 score = rel * (0.8 + 0.15 * (1 if dated else fresh) + 0.05 * row['importance'])
+                if exact:
+                    score += 10
                 row.update(score=round(score, 5), match_terms=hits,
                            freshness=round(fresh, 5), half_life_days=None if row['category']=='core' else 30*(1+2*row['importance']))
                 yield score, row['created'], row['id'], row

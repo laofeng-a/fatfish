@@ -4,6 +4,8 @@ import json
 import re
 import time
 
+from memory_recall import prepare, rank_match
+
 CHAT=re.compile(r'-?[1-9][0-9]{0,19}\Z')
 MESSAGE=re.compile(r'[1-9][0-9]{0,19}\Z')
 STATES={'processing','completed','no_reply','error','interrupted'}
@@ -64,15 +66,31 @@ class ConversationAccess:
             if kind not in ('all','user','assistant','reading'):raise ValueError('未知记录类别')
             query=query.strip()[:120];snippet=1600 if query else 400
             params=[target];where=['chat=?']
-            if query:where.append('content LIKE ?');params.append('%'+query+'%')
-            else:where.append("content!=''")
+            if not query:where.append("content!=''")
             if kind=='user':where.append("kind IN ('user','member','forwarded','bot')")
             elif kind!='all':where.append('kind=?');params.append(kind)
             for field,operator in (('after','>='),('before','<=')):
                 if field in args:where.append('created'+operator+'?');params.append(self.timestamp(args[field]))
             if 'after' in args and 'before' in args and self.timestamp(args['after'])>self.timestamp(args['before']):raise ValueError('after不能晚于before')
-            rows=db.execute(f'SELECT id,chat AS chat_id,msg,kind,substr(content,1,{snippet}) AS snippet,created FROM events WHERE '+ ' AND '.join(where)+' ORDER BY id DESC LIMIT ?',params+[limit])
-            result={'chat_id':target,'records':[dict(r) for r in rows]}
+            if not query:
+                rows=db.execute(f'SELECT id,chat AS chat_id,msg,kind,substr(content,1,{snippet}) AS snippet,created FROM events WHERE '+' AND '.join(where)+' ORDER BY id DESC LIMIT ?',params+[limit])
+                records=[dict(row) for row in rows]
+            else:
+                # Token overlap, not one contiguous substring. Newer id only breaks ties.
+                fetched=list(db.execute('SELECT id,chat AS chat_id,msg,kind,content,created FROM events WHERE '+' AND '.join(where),params))
+                idf,average=prepare(query,(row['content'] for row in fetched))
+                ranked=[]
+                for row in fetched:
+                    exact,score,hits=rank_match(row['content'],query,idf,average)
+                    if not score and not exact:continue
+                    ranked.append((1 if exact else 0,score,row['id'],row,hits))
+                ranked.sort(key=lambda item:item[:3],reverse=True)
+                records=[]
+                for _exact,_score,_id,row,_hits in ranked[:limit]:
+                    item={key:row[key] for key in ('id','chat_id','msg','kind','created')}
+                    item['snippet']=row['content'][:snippet]
+                    records.append(item)
+            result={'chat_id':target,'records':records}
             if not query:
                 result['view']='recent'
                 if target==self.r.owner:

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "description": "当前词法实现的中文召回基线。没有改查询、索引或排序。",
-  "generated_at": "2026-11-13T04:15:52+00:00",
+  "description": "中文词法召回测量。整句命中优先；其余按汉字双字/三字和英文词的 BM25，不是/并非 不算证据，新近记录只作平局。",
+  "generated_at": "2026-11-13T04:27:28+00:00",
   "python": "3.12.3",
   "platform": "Linux-6.12.113+-x86_64-with-glibc2.39",
   "limit": 8,
@@ -25,19 +25,19 @@
       "exact_cases": 5,
       "paraphrase_cases": 4,
       "distractor_cases": 4,
-      "hit_at_1": 0.5556,
-      "hit_at_5": 0.5556,
+      "hit_at_1": 0.8889,
+      "hit_at_5": 0.8889,
       "exact_hit_at_1": 1.0,
       "exact_hit_at_5": 1.0,
-      "paraphrase_hit_at_1": 0.0,
-      "paraphrase_hit_at_5": 0.0,
-      "distractor_false_positive_rate": 0.5,
-      "distractor_false_positives": 2,
-      "zero_result_count": 6,
-      "zero_result_on_expected_hit": 4,
+      "paraphrase_hit_at_1": 0.75,
+      "paraphrase_hit_at_5": 0.75,
+      "distractor_false_positive_rate": 0.25,
+      "distractor_false_positives": 1,
+      "zero_result_count": 3,
+      "zero_result_on_expected_hit": 1,
       "latency_ms": {
-        "p50": 1.266,
-        "p95": 1.466,
+        "p50": 1.927,
+        "p95": 2.135,
         "samples": 117
       }
     },
@@ -47,19 +47,19 @@
       "exact_cases": 2,
       "paraphrase_cases": 2,
       "distractor_cases": 2,
-      "hit_at_1": 0.5,
-      "hit_at_5": 0.5,
+      "hit_at_1": 1.0,
+      "hit_at_5": 1.0,
       "exact_hit_at_1": 1.0,
       "exact_hit_at_5": 1.0,
-      "paraphrase_hit_at_1": 0.0,
-      "paraphrase_hit_at_5": 0.0,
-      "distractor_false_positive_rate": 0.5,
-      "distractor_false_positives": 1,
-      "zero_result_count": 3,
-      "zero_result_on_expected_hit": 2,
+      "paraphrase_hit_at_1": 1.0,
+      "paraphrase_hit_at_5": 1.0,
+      "distractor_false_positive_rate": 0.0,
+      "distractor_false_positives": 0,
+      "zero_result_count": 1,
+      "zero_result_on_expected_hit": 0,
       "latency_ms": {
-        "p50": 1.849,
-        "p95": 2.148,
+        "p50": 2.508,
+        "p95": 2.718,
         "samples": 54
       }
     },
@@ -75,13 +75,13 @@
       "exact_hit_at_5": 1.0,
       "paraphrase_hit_at_1": 0.5,
       "paraphrase_hit_at_5": 0.5,
-      "distractor_false_positive_rate": 0.3333,
-      "distractor_false_positives": 1,
+      "distractor_false_positive_rate": 0.0,
+      "distractor_false_positives": 0,
       "zero_result_count": 4,
       "zero_result_on_expected_hit": 2,
       "latency_ms": {
-        "p50": 2.029,
-        "p95": 2.257,
+        "p50": 2.473,
+        "p95": 2.713,
         "samples": 99
       }
     },
@@ -97,13 +97,13 @@
       "exact_hit_at_5": 1.0,
       "paraphrase_hit_at_1": 0.6667,
       "paraphrase_hit_at_5": 0.6667,
-      "distractor_false_positive_rate": 0.5,
-      "distractor_false_positives": 1,
+      "distractor_false_positive_rate": 0.0,
+      "distractor_false_positives": 0,
       "zero_result_count": 2,
       "zero_result_on_expected_hit": 1,
       "latency_ms": {
-        "p50": 0.3487,
-        "p95": 0.4294,
+        "p50": 0.5792,
+        "p95": 0.6651,
         "samples": 72
       }
     }
@@ -120,14 +120,16 @@
       "expect_empty": false,
       "forbid_top1": [],
       "top": [
-        "e_noodle"
+        "e_noodle",
+        "e_noodle_ack",
+        "e_cilantro"
       ],
       "hit_at_1": true,
       "hit_at_5": true,
       "false_positive": false,
       "zero_results": false,
       "note": "整句只出现在用户那条里；助手回执没有顿号。",
-      "latency_ms_p50": 1.356
+      "latency_ms_p50": 1.967
     },
     {
       "id": "history-exact-paper",
@@ -147,7 +149,7 @@
       "false_positive": false,
       "zero_results": false,
       "note": "论文题目原文。",
-      "latency_ms_p50": 1.277
+      "latency_ms_p50": 1.916
     },
     {
       "id": "history-exact-drawer",
@@ -167,7 +169,7 @@
       "false_positive": false,
       "zero_results": false,
       "note": "充电器位置原文。",
-      "latency_ms_p50": 1.288
+      "latency_ms_p50": 1.883
     },
     {
       "id": "history-exact-cat",
@@ -187,7 +189,7 @@
       "false_positive": false,
       "zero_results": false,
       "note": "阅读记录 JSON 里的标题。",
-      "latency_ms_p50": 1.258
+      "latency_ms_p50": 1.85
     },
     {
       "id": "history-exact-swim",
@@ -207,7 +209,7 @@
       "false_positive": false,
       "zero_results": false,
       "note": "学游泳那句原文。",
-      "latency_ms_p50": 1.296
+      "latency_ms_p50": 1.909
     },
     {
       "id": "history-para-noodle",
@@ -219,13 +221,15 @@
       ],
       "expect_empty": false,
       "forbid_top1": [],
-      "top": [],
-      "hit_at_1": false,
-      "hit_at_5": false,
+      "top": [
+        "e_noodle"
+      ],
+      "hit_at_1": true,
+      "hit_at_5": true,
       "false_positive": false,
-      "zero_results": true,
+      "zero_results": false,
       "note": "换说法指东门牛肉面，原文没有“面馆”。",
-      "latency_ms_p50": 1.283
+      "latency_ms_p50": 1.907
     },
     {
       "id": "history-para-paper",
@@ -243,7 +247,7 @@
       "false_positive": false,
       "zero_results": true,
       "note": "用“作业/哪天交”指论文截止日期。",
-      "latency_ms_p50": 1.252
+      "latency_ms_p50": 1.853
     },
     {
       "id": "history-para-allergy",
@@ -255,13 +259,15 @@
       ],
       "expect_empty": false,
       "forbid_top1": [],
-      "top": [],
-      "hit_at_1": false,
-      "hit_at_5": false,
+      "top": [
+        "e_allergy"
+      ],
+      "hit_at_1": true,
+      "hit_at_5": true,
       "false_positive": false,
-      "zero_results": true,
+      "zero_results": false,
       "note": "花生和虾被说成海鲜和坚果。",
-      "latency_ms_p50": 1.266
+      "latency_ms_p50": 1.927
     },
     {
       "id": "history-para-drawer",
@@ -273,13 +279,15 @@
       ],
       "expect_empty": false,
       "forbid_top1": [],
-      "top": [],
-      "hit_at_1": false,
-      "hit_at_5": false,
+      "top": [
+        "e_charger"
+      ],
+      "hit_at_1": true,
+      "hit_at_5": true,
       "false_positive": false,
-      "zero_results": true,
+      "zero_results": false,
       "note": "充电头指充电器。",
-      "latency_ms_p50": 1.263
+      "latency_ms_p50": 2.04
     },
     {
       "id": "history-dist-empty",
@@ -295,7 +303,7 @@
       "false_positive": false,
       "zero_results": true,
       "note": "语料里没有这件事。",
-      "latency_ms_p50": 1.261
+      "latency_ms_p50": 2.005
     },
     {
       "id": "history-dist-goldfish",
@@ -308,16 +316,16 @@
         "e_tank"
       ],
       "top": [
-        "e_tank",
         "e_whale_ack",
+        "e_tank",
         "e_whale"
       ],
       "hit_at_1": false,
       "hit_at_5": false,
-      "false_positive": true,
+      "false_positive": false,
       "zero_results": false,
       "note": "口误和鱼缸都含“金鱼”。不该把换水那条排到第一。",
-      "latency_ms_p50": 1.257
+      "latency_ms_p50": 1.903
     },
     {
       "id": "history-dist-cilantro",
@@ -339,7 +347,7 @@
       "false_positive": true,
       "zero_results": false,
       "note": "问香菜时不该先命中炒蛋，而不是牛肉面那条偏好。",
-      "latency_ms_p50": 1.265
+      "latency_ms_p50": 1.898
     },
     {
       "id": "history-dist-other-chat",
@@ -358,7 +366,7 @@
       "false_positive": false,
       "zero_results": true,
       "note": "这句话只在另一个会话里，当前私聊不该返回。",
-      "latency_ms_p50": 1.235
+      "latency_ms_p50": 2.034
     },
     {
       "id": "chat-exact-paper",
@@ -378,7 +386,7 @@
       "false_positive": false,
       "zero_results": false,
       "note": "与 history_find 同一条原文，走 chat_recall 的 matched_ids。",
-      "latency_ms_p50": 1.838
+      "latency_ms_p50": 2.51
     },
     {
       "id": "chat-exact-swim",
@@ -398,7 +406,7 @@
       "false_positive": false,
       "zero_results": false,
       "note": "短原文，确认展开入口没有把命中弄丢。",
-      "latency_ms_p50": 1.861
+      "latency_ms_p50": 2.463
     },
     {
       "id": "chat-para-noodle",
@@ -410,13 +418,15 @@
       ],
       "expect_empty": false,
       "forbid_top1": [],
-      "top": [],
-      "hit_at_1": false,
-      "hit_at_5": false,
+      "top": [
+        "e_noodle"
+      ],
+      "hit_at_1": true,
+      "hit_at_5": true,
       "false_positive": false,
-      "zero_results": true,
+      "zero_results": false,
       "note": "同 history 改写，chat_recall 仍用子串匹配。",
-      "latency_ms_p50": 1.825
+      "latency_ms_p50": 2.507
     },
     {
       "id": "chat-para-drawer",
@@ -428,13 +438,15 @@
       ],
       "expect_empty": false,
       "forbid_top1": [],
-      "top": [],
-      "hit_at_1": false,
-      "hit_at_5": false,
+      "top": [
+        "e_charger"
+      ],
+      "hit_at_1": true,
+      "hit_at_5": true,
       "false_positive": false,
-      "zero_results": true,
+      "zero_results": false,
       "note": "同 history 改写。",
-      "latency_ms_p50": 1.855
+      "latency_ms_p50": 2.524
     },
     {
       "id": "chat-dist-empty",
@@ -450,7 +462,7 @@
       "false_positive": false,
       "zero_results": true,
       "note": "不该召回任何聊天。",
-      "latency_ms_p50": 1.824
+      "latency_ms_p50": 2.471
     },
     {
       "id": "chat-dist-goldfish",
@@ -463,16 +475,16 @@
         "e_tank"
       ],
       "top": [
-        "e_tank",
         "e_whale_ack",
+        "e_tank",
         "e_whale"
       ],
       "hit_at_1": false,
       "hit_at_5": false,
-      "false_positive": true,
+      "false_positive": false,
       "zero_results": false,
       "note": "不该把鱼缸换水排在口误前面。",
-      "latency_ms_p50": 1.943
+      "latency_ms_p50": 2.469
     },
     {
       "id": "memory-exact-allergy",
@@ -492,7 +504,7 @@
       "false_positive": false,
       "zero_results": false,
       "note": "核心记忆原文片段。",
-      "latency_ms_p50": 2.108
+      "latency_ms_p50": 2.567
     },
     {
       "id": "memory-exact-drawer",
@@ -512,7 +524,7 @@
       "false_positive": false,
       "zero_results": false,
       "note": "推断记忆里的位置。",
-      "latency_ms_p50": 2.059
+      "latency_ms_p50": 2.436
     },
     {
       "id": "memory-exact-noodle",
@@ -532,7 +544,7 @@
       "false_positive": false,
       "zero_results": false,
       "note": "看法记忆里的店名。",
-      "latency_ms_p50": 2.05
+      "latency_ms_p50": 2.585
     },
     {
       "id": "memory-exact-cat",
@@ -552,7 +564,7 @@
       "false_positive": false,
       "zero_results": false,
       "note": "话题记忆里的视频编号。",
-      "latency_ms_p50": 2.008
+      "latency_ms_p50": 2.531
     },
     {
       "id": "memory-para-allergy",
@@ -570,7 +582,7 @@
       "false_positive": false,
       "zero_results": true,
       "note": "虾被说成海鲜，记忆正文没有这两个字连在一起。",
-      "latency_ms_p50": 1.964
+      "latency_ms_p50": 2.37
     },
     {
       "id": "memory-para-noodle",
@@ -588,7 +600,7 @@
       "false_positive": false,
       "zero_results": true,
       "note": "用口味和面馆指牛肉面偏好。",
-      "latency_ms_p50": 1.95
+      "latency_ms_p50": 2.339
     },
     {
       "id": "memory-para-whale",
@@ -608,7 +620,7 @@
       "false_positive": false,
       "zero_results": false,
       "note": "还共享“鲸鱼”，不是整句。",
-      "latency_ms_p50": 2.029
+      "latency_ms_p50": 2.478
     },
     {
       "id": "memory-para-cat",
@@ -628,7 +640,7 @@
       "false_positive": false,
       "zero_results": false,
       "note": "语序倒过来，仍有“跳水”。",
-      "latency_ms_p50": 1.987
+      "latency_ms_p50": 2.424
     },
     {
       "id": "memory-dist-pet",
@@ -641,15 +653,15 @@
         "m_whale"
       ],
       "top": [
-        "m_whale",
-        "m_tank"
+        "m_tank",
+        "m_whale"
       ],
       "hit_at_1": false,
       "hit_at_5": false,
-      "false_positive": true,
+      "false_positive": false,
       "zero_results": false,
       "note": "问宠物时不该把“不是宠物”的口误排第一；鱼缸那条才是喂养。",
-      "latency_ms_p50": 2.105
+      "latency_ms_p50": 2.56
     },
     {
       "id": "memory-dist-empty",
@@ -665,7 +677,7 @@
       "false_positive": false,
       "zero_results": true,
       "note": "没有这条记忆。",
-      "latency_ms_p50": 1.925
+      "latency_ms_p50": 2.371
     },
     {
       "id": "memory-dist-quantum",
@@ -681,7 +693,7 @@
       "false_positive": false,
       "zero_results": true,
       "note": "没有这条记忆。",
-      "latency_ms_p50": 1.919
+      "latency_ms_p50": 2.4
     },
     {
       "id": "notes-exact-paper",
@@ -701,7 +713,7 @@
       "false_positive": false,
       "zero_results": false,
       "note": "只在较新的一篇日记里。",
-      "latency_ms_p50": 0.3621
+      "latency_ms_p50": 0.6433
     },
     {
       "id": "notes-exact-tank",
@@ -721,7 +733,7 @@
       "false_positive": false,
       "zero_results": false,
       "note": "只在换水那篇日记里。",
-      "latency_ms_p50": 0.3982
+      "latency_ms_p50": 0.5639
     },
     {
       "id": "notes-exact-whale",
@@ -741,7 +753,7 @@
       "false_positive": false,
       "zero_results": false,
       "note": "只在鲸鱼口误那篇日记里。",
-      "latency_ms_p50": 0.355
+      "latency_ms_p50": 0.5805
     },
     {
       "id": "notes-para-paper",
@@ -761,7 +773,7 @@
       "false_positive": false,
       "zero_results": false,
       "note": "和日记共享“论文”“还没”，不是原句。",
-      "latency_ms_p50": 0.346
+      "latency_ms_p50": 0.5823
     },
     {
       "id": "notes-para-whale",
@@ -781,7 +793,7 @@
       "false_positive": false,
       "zero_results": false,
       "note": "共享“鲸鱼”，说法不同。",
-      "latency_ms_p50": 0.336
+      "latency_ms_p50": 0.5815
     },
     {
       "id": "notes-para-miss",
@@ -799,7 +811,7 @@
       "false_positive": false,
       "zero_results": true,
       "note": "指没动笔的论文，正文里没有这些词。",
-      "latency_ms_p50": 0.2961
+      "latency_ms_p50": 0.528
     },
     {
       "id": "notes-dist-goldfish",
@@ -812,15 +824,15 @@
         "n_whale"
       ],
       "top": [
-        "n_whale",
-        "n_tank"
+        "n_tank",
+        "n_whale"
       ],
       "hit_at_1": false,
       "hit_at_5": false,
-      "false_positive": true,
+      "false_positive": false,
       "zero_results": false,
       "note": "口误日记和鱼缸日记都有“金鱼”。不该靠文件顺序把口误排第一。",
-      "latency_ms_p50": 0.3664
+      "latency_ms_p50": 0.58
     },
     {
       "id": "notes-dist-empty",
@@ -836,7 +848,7 @@
       "false_positive": false,
       "zero_results": true,
       "note": "日记和 MEMORY.md 都没有。",
-      "latency_ms_p50": 0.3029
+      "latency_ms_p50": 0.513
     }
   ]
 }

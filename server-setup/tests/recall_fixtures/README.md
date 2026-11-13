@@ -1,6 +1,6 @@
 # 中文召回基线
 
-用一份假的聊天、结构化记忆和日记，测量**现在这套词法检索**能找回多少。不读真实聊天，也不改 `history_find`、`chat_recall`、`memory_find`、`search_notes` 的实现。
+用一份假的聊天、结构化记忆和日记，测量 `history_find`、`chat_recall`、`memory_find` 和 `search_notes` 能找回多少。不读真实聊天。`baseline_results.json` 是当前实现跑出来的结果；改检索之前的数字在 `cursor/recall-baseline-8847`。
 
 语料在 `corpus.json`，问题在 `cases.json`。日记路径按运行当天的 UTC+8 日期加 `day_offset` 生成，所以换一天跑也不会写成“未来日记”。
 

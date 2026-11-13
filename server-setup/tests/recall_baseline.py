@@ -301,7 +301,7 @@ def run(reps=DEFAULT_REPS, fixtures=FIXTURES):
             results.append(row)
     report = {
         "schema_version": 1,
-        "description": "当前词法实现的中文召回基线。没有改查询、索引或排序。",
+        "description": "中文词法召回测量。整句命中优先；其余按汉字双字/三字和英文词的 BM25，不是/并非 不算证据，新近记录只作平局。",
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
         "python": sys.version.split()[0],
         "platform": platform.platform(),
@@ -364,7 +364,7 @@ def format_ms(value):
 
 def render_table(report):
     lines = [
-        "中文召回基线（当前实现，未改检索）",
+        "中文召回测量（当前词法排序）",
         "limit=%d  reps=%d  %s" % (report["limit"], report["reps"], report["generated_at"]),
         "",
         "%-14s %5s %7s %7s %8s %8s %6s %6s %8s %8s"

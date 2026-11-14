@@ -34,6 +34,7 @@ Long conversations accumulate dialogue, tool JSON, transcripts, and execution lo
 - Fold large, already-consumed tool outputs into short previews, result states, and retrieval references such as `record_id / source_id / job_id`. Keep the current unread tool batch intact.
 - Store attributed dialogue, confirmed deliveries, reasoning, and tool details under stable turn numbers, separately from the model's input view. Summary material omits execution logs and internal reasoning while retaining tool reads of actual conversations and diaries as labeled sources.
 - Generate a candidate summary, then validate speakers, turn numbers, exact quotations, coverage, and protected agreements. Rendered prose plus separate agreements must fit within **1,800 characters**, without a target length. Activate the new version and advance coverage only after acceptance; rejection retains the previous version, source records, and reason. Stale inputs cannot overwrite newer state.
+- Summary material includes canonical profile text for agreement-home evidence. Invalid quotations, missing home evidence, excessive length, and incomplete output can receive one targeted correction within the same 60-second deadline, followed by full validation. Compaction preserves the configured recent complete turns, **6 by default**.
 - Separate persistent context by responsibility: SOUL describes expression and interaction, USER holds lasting preferences, AGENT holds general principles, and HEARTBEAT supports background scenarios. Retrieve specific experiences from chat, diaries, and reading records.
 - Keep sources, timestamps, expiry, and replacement relationships with memories. Corrections make old records historical and provide updated facts alongside relevant summaries; background maintenance handles related free-text references.
 - Maintain one canonical set of profile files. Writes require `expected_revision`, retain earlier versions, and verify the saved content by reading it back, reducing conflicting updates between the assistant and maintenance code.
@@ -88,7 +89,9 @@ Autonomous activity and its derived alarms, cron jobs, queued wakeups, and callb
 
 An optional deployment setting `autonomy_daily_window`, for example `{"start":"18:00","end":"22:00","utc_offset_minutes":480}`, limits new free-activity wakeups to a daily window. With a 3600-second interval, opportunities fall at 18:00, 19:00, 20:00, and 21:00 UTC+8, then resume the next day at 18:00. Delayed heartbeat claims skip elapsed slots without a catch-up burst. An already-started turn may finish; task patrol and quota watches remain independent. Opening the daily window never re-enables an owner-disabled switch. Status includes the window, whether it is currently open, and the next due time.
 
-Optional `companion_cadence_enabled=true` adds two-minute conversation opportunities through the same autonomous route, sharing persona, tools, and relationship context. A single nullable `next_chat_due` holds the plan: a new human message cancels the old plan and invalidates its generated candidate; a confirmed text, sticker, or image delivery sets the deadline to **120 seconds** after delivery. Claiming the deadline clears it first. A normally completed turn without a send ends this temporary chain; successful delivery schedules another opportunity. The assistant can converse, share, read, explore, organize, or pursue other authorized interests. The chain shares the daily window and master switch with autonomous activity; ending it quietly preserves the default free-activity schedule.
+Optional `companion_cadence_enabled=true` adds conversation opportunities at any hour through the same autonomous route, sharing persona, tools, and relationship context. A single nullable `next_chat_due` holds the plan. A new human message clears the old plan and invalidates its candidate. Confirmed text, sticker, or image delivery schedules the next opportunity at the current companion interval, **60 seconds** by default. Claiming the deadline clears it first. A quiet finish ends automatic continuation. The assistant can converse, share, read, explore, organize, or pursue other authorized interests. Companion opportunities follow the autonomy master switch, and free activity follows its daily window.
+
+The assistant can use `autonomy` with `chat_schedule` to set or move the next opportunity. Use `delay_seconds` or a timezone-aware `due_at` at least 60 seconds ahead. `interval_seconds` adjusts the delay after confirmed delivery and schedules the next opportunity when given on its own. An explicit time survives delivery or a quiet finish in the same turn. A new human message takes over the plan. Use `chat_cancel` to cancel the next opportunity and `status` to inspect the settings.
 
 Heartbeat performs a lightweight due check every **5 seconds**, without calling the model when nothing is due. Active human turns and background leases retain the existing scheduler's priority. Before sending, a narrow filter checks background text, message parts, and media captions for known Chinese internal conclusions such as “本轮保持静默” (“this round stays silent”). A match keeps the whole batch internal and ends that turn, without asking the model to rewrite and resend it. Ordinary foreground farewells, quotations, and code discussions remain available; fixed rules do not claim to detect every paraphrase. The emote script uses the same delivery gate and real receipts, preserving selection and usage accounting; unconfirmed sends do not schedule another opportunity.
 
@@ -105,14 +108,15 @@ The program handles timing, source validation, delivery guards, and receipts. Th
 ```mermaid
 flowchart LR
     Human[New human message] --> Reset[Cancel old plan and candidate]
-    Sent[Confirmed delivery] --> Due[next_chat_due = delivery time + 120s]
+    Sent[Confirmed delivery] --> Due[next_chat_due = delivery time + companion interval]
+    Scheduled[Explicit schedule] --> Due
     Due --> Claim[Due and capacity available: claim and clear]
     Claim --> Activity[Conversation or autonomous activity]
     Activity -->|Explicit delivery succeeds| Sent
     Activity -->|Quiet finish or internal conclusion blocked| Quiet[End temporary chain; retain hourly activity]
 ```
 
-`autonomy status` exposes `companion.next_chat_due`. A null value means no temporary conversation plan; it does not mean the autonomy master switch is off. Activity records distinguish `chat_armed`, `chat_claimed`, `chat_finished`, and cancellation reasons. See the [companion release record](docs/RELEASE-2026-11-06-COMPANION-CADENCE.md) for configuration, verification scope, and rollback.
+`autonomy status` exposes `companion.next_chat_due`. A null value means no temporary conversation plan; it does not mean the autonomy master switch is off. Activity records distinguish `chat_armed`, `chat_claimed`, `chat_finished`, and cancellation reasons. The [previous release record](docs/RELEASE-2026-11-06-COMPANION-CADENCE.md) describes the original two-minute behavior; this section reflects the current design.
 
 ### 4. Scheduling and delivery: prioritize people, keep internal results quiet
 

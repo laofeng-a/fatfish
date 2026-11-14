@@ -92,9 +92,6 @@ func (m *fatfishHistoryManager) material(key string) (contextledger.Material, er
 	}
 	keep := m.keepRecent
 	if len(completed) <= keep {
-		keep = 1
-	}
-	if len(completed) <= keep {
 		return contextledger.Material{}, fmt.Errorf("not_enough_complete_turns")
 	}
 	material := contextledger.Material{Previous: st, MaxNumber: last, Homes: map[string]string{}}
@@ -157,6 +154,8 @@ type fatfishSummaryAttempt struct {
 	ID                int64
 	Accepted          bool
 	State             contextledger.State
+	// Material is the snapshot after any revision rebase during recording.
+	Material contextledger.Material
 }
 
 func (m *fatfishHistoryManager) summaryAttempt(callCtx context.Context, key string, material contextledger.Material, messages []providers.Message) (fatfishSummaryAttempt, error) {
@@ -177,7 +176,9 @@ func (m *fatfishHistoryManager) summaryAttempt(callCtx context.Context, key stri
 	} else {
 		generated = response.Content
 		c, err = contextledger.ParseCandidate(generated)
-		if err != nil {
+		if response.FinishReason != "stop" && response.FinishReason != "end_turn" {
+			reason = "generation_not_finished:" + response.FinishReason
+		} else if err != nil {
 			reason = "invalid_candidate_json"
 		} else {
 			body, err = contextledger.Validate(c, material, response.FinishReason)
@@ -189,6 +190,11 @@ func (m *fatfishHistoryManager) summaryAttempt(callCtx context.Context, key stri
 		}
 	}
 	if _, err = m.sync(agent, key, false); err != nil {
+		return fatfishSummaryAttempt{}, err
+	}
+	// Deliveries of the reply that triggered this summary may still be recorded
+	// on recent turns; they do not invalidate the summarized past range.
+	if _, err = m.store.Rebase(key, &material); err != nil {
 		return fatfishSummaryAttempt{}, err
 	}
 	id, err := m.store.RecordCandidate(key, material, c, generated, body, reason, accepted, m.cooldown)
@@ -205,7 +211,7 @@ func (m *fatfishHistoryManager) summaryAttempt(callCtx context.Context, key stri
 	if err != nil {
 		return fatfishSummaryAttempt{}, err
 	}
-	return fatfishSummaryAttempt{Candidate: c, Raw: generated, Body: body, Reason: reason, ID: id, Accepted: accepted && st.Version == id, State: st}, nil
+	return fatfishSummaryAttempt{Candidate: c, Raw: generated, Body: body, Reason: reason, ID: id, Accepted: accepted && st.Version == id, State: st, Material: material}, nil
 }
 
 func (m *fatfishHistoryManager) generate(ctx context.Context, key string) error {
@@ -225,15 +231,33 @@ func (m *fatfishHistoryManager) generate(ctx context.Context, key string) error 
 	if err != nil {
 		return err
 	}
-	// One targeted repair inside the same deadline. Save the rejected draft
-	// first, preserve independently grounded agreements, and yield to new input.
-	if !attempt.Accepted && attempt.Reason == "unmatched_prose_quote" && callCtx.Err() == nil && !m.humanBusy(key) && attempt.State.Version == material.Previous.Version && attempt.State.Covered == material.Previous.Covered && attempt.State.Revision == material.Previous.Revision {
+	// One source-grounded repair shares the original deadline and snapshot.
+	material = attempt.Material
+	instruction := contextledger.CandidateRepairInstruction(attempt.Candidate, material, attempt.Reason)
+	skip := ""
+	switch {
+	case attempt.Accepted:
+	case instruction == "":
+		skip = "no_repair_for_reason"
+	case callCtx.Err() != nil:
+		skip = "deadline"
+	case m.humanBusy(key):
+		skip = "human_busy"
+	case attempt.State.Version != material.Previous.Version || attempt.State.Covered != material.Previous.Covered:
+		skip = "active_version_changed"
+	case attempt.State.Revision != material.Previous.Revision:
+		skip = "snapshot_changed"
+	}
+	if skip != "" {
+		logger.InfoCF("agent", "Summary repair skipped", map[string]any{"session_key": key, "reason": attempt.Reason, "skip": skip})
+	}
+	if !attempt.Accepted && skip == "" {
 		material.Previous.Agreements = attempt.State.Agreements
 		raw, err = contextledger.ModelMaterialJSON(material)
 		if err != nil {
 			return err
 		}
-		repair := []providers.Message{{Role: "system", Content: fatfishSummaryPrompt}, {Role: "user", Content: string(raw)}, {Role: "assistant", Content: attempt.Raw}, {Role: "user", Content: contextledger.QuoteRepairInstruction(attempt.Candidate, material)}}
+		repair := []providers.Message{{Role: "system", Content: fatfishSummaryPrompt}, {Role: "user", Content: string(raw)}, {Role: "assistant", Content: attempt.Raw}, {Role: "user", Content: instruction}}
 		if tokens, _ := fatfishCountInput(repair, nil); tokens <= agent.ContextWindow-4096 {
 			attempt, err = m.summaryAttempt(callCtx, key, material, repair)
 			if err != nil {

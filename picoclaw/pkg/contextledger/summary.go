@@ -101,6 +101,68 @@ func QuoteRepairInstruction(c Candidate, m Material) string {
 	return "上一候选已拒绝，未替换旧记录。请根据原始材料核对并修正以下问题，返回完整候选JSON：有原文依据的引文放入quotes并用{{q1}}等引用；概括用叙述表达，缺少依据的内容删除。保留已有约定id和有效来源，覆盖范围保持不变。\n" + string(data)
 }
 
+// A single correction uses the same sources and validation as the first draft.
+// Provider failures and changed snapshots are handled by the caller.
+func CandidateRepairInstruction(c Candidate, m Material, reason string) string {
+	if reason == "unmatched_prose_quote" {
+		return QuoteRepairInstruction(c, m)
+	}
+	details := map[string]any{"reason": reason, "allowed_from": m.From, "allowed_to": m.To}
+	var guidance string
+	switch {
+	case strings.HasPrefix(reason, "unmatched_quote:"):
+		var invalid []Quote
+		var sources []Turn
+		for _, quote := range c.Quotes {
+			if validQuote(quote, m) {
+				continue
+			}
+			invalid = append(invalid, quote)
+			for _, turn := range m.Past {
+				if turn.Number == quote.Turn {
+					sources = append(sources, turn)
+				}
+			}
+		}
+		details["invalid_quotes"] = invalid
+		details["actual_dialogue"] = modelDialogue(sources, false)
+		guidance = "引文从同一说话人的原话连续取片段，逐字保留标点和换行。跨句摘录分别列为quotes；概括用正文叙述。"
+	case strings.HasPrefix(reason, "unverified_agreement_home:"):
+		var invalid []Agreement
+		for _, agreement := range c.Agreements {
+			if agreement.ID == strings.TrimPrefix(reason, "unverified_agreement_home:") {
+				invalid = append(invalid, agreement)
+			}
+		}
+		details["invalid_homes"] = invalid
+		guidance = "约定已核对来源的内容继续保留。home与home_quote只填写canonical_homes中确有的文件名及连续原文；归属待确认时两者留空，约定仍由独立记录承接。"
+	case strings.HasPrefix(reason, "agreement_omitted:"):
+		var missing []Agreement
+		for _, agreement := range m.Previous.Agreements {
+			if agreement.ID == strings.TrimPrefix(reason, "agreement_omitted:") {
+				missing = append(missing, agreement)
+			}
+		}
+		details["omitted_agreements"] = missing
+		guidance = "已有约定必须全部保留在agreements中：id、text、state、sources照原样沿用；只有出现新的原话依据时才改state并填写changed_by。home与home_quote在canonical_homes中找不到连续原文时两者留空，约定本身不要删除。"
+	case reason == "summary_too_long":
+		prose, _ := renderQuoteReferences(c.Summary, c.Quotes)
+		for _, agreement := range c.Agreements {
+			if text := renderAgreement(agreement); text != "" {
+				prose += "\n" + text
+			}
+		}
+		details["rendered_characters"] = utf8.RuneCountInString(prose)
+		guidance = "把正文与独立约定合计缩到1800字符内，给约定留出空间；保留能自然接话的交流脉络和少量关键引文。"
+	case reason == "invalid_candidate_json" || strings.HasPrefix(reason, "generation_not_finished:"):
+		guidance = "上一输出未形成完整候选。请精简叙述与新增约定，生成完整且闭合的JSON。沿用candidate_template的字段、已有约定与覆盖范围，渲染正文加独立约定最多1800字符。"
+	default:
+		return ""
+	}
+	raw, _ := json.Marshal(details)
+	return "上一候选已记录为拒绝，覆盖点继续使用旧值。请依照具体反馈修正并返回完整候选JSON。" + guidance + "\n" + string(raw)
+}
+
 func ParseCandidate(raw string) (Candidate, error) {
 	text := strings.TrimSpace(raw)
 	if strings.HasPrefix(text, "```json\n") && strings.HasSuffix(text, "```") {
@@ -210,12 +272,14 @@ func Validate(c Candidate, m Material, finish string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// Unsourced quotation marks become paraphrase. Sourced ones stay quoted.
+	prose = relaxUnmatchedProseQuotes(prose, m)
 	body := prose
-	for _, a := range c.Agreements {
+	for i := range c.Agreements {
+		a := c.Agreements[i]
 		if a.ID == "" || seen[a.ID] || strings.TrimSpace(a.Text) == "" || len(a.Sources) == 0 {
 			return "", fmt.Errorf("invalid_agreement")
 		}
-		seen[a.ID] = true
 		if a.State != "active" && a.State != "completed" && a.State != "revoked" && a.State != "superseded" {
 			return "", fmt.Errorf("invalid_agreement_state")
 		}
@@ -224,7 +288,9 @@ func Validate(c Candidate, m Material, finish string) (string, error) {
 				return "", fmt.Errorf("unmatched_agreement_source:%s", a.ID)
 			}
 		}
-		if old, ok := previous[a.ID]; ok && (old.Text != a.Text || old.State != a.State || old.Home != a.Home) {
+		// Home is attribution metadata checked against current files below; only
+		// text and state changes need new dialogue evidence.
+		if old, ok := previous[a.ID]; ok && (old.Text != a.Text || old.State != a.State) {
 			changed := false
 			boundary := m.Previous.Covered
 			for _, q := range append(append([]Quote(nil), old.Sources...), old.ChangedBy...) {
@@ -243,35 +309,122 @@ func Validate(c Candidate, m Material, finish string) (string, error) {
 				return "", fmt.Errorf("agreement_changed_without_new_source:%s", a.ID)
 			}
 		}
+		// A brand-new non-active agreement without change evidence is left out.
+		// An id that already exists still has to be carried and sourced above.
 		if _, exists := previous[a.ID]; !exists && a.State != "active" && len(a.ChangedBy) == 0 {
-			return "", fmt.Errorf("agreement_status_requires_change_source:%s", a.ID)
+			continue
 		}
-		if a.Home != "" {
-			home, ok := m.Homes[a.Home]
-			if !ok || strings.TrimSpace(a.HomeQuote) == "" || !strings.Contains(home, a.HomeQuote) {
-				return "", fmt.Errorf("unverified_agreement_home:%s", a.ID)
-			}
+		if old, ok := previous[a.ID]; ok {
+			normalizeHome(&a, &old, m)
+		} else {
+			normalizeHome(&a, nil, m)
 		}
+		c.Agreements[i] = a
+		seen[a.ID] = true
 		if rendered := renderAgreement(a); rendered != "" {
 			body += "\n" + rendered
 		}
 	}
-	for id := range previous {
-		if !seen[id] {
-			return "", fmt.Errorf("agreement_omitted:%s", id)
+	// Existing agreements are carried by the program, not by the model's copy:
+	// an omitted one keeps its stored text, state and sources unchanged.
+	for _, old := range m.Previous.Agreements {
+		if seen[old.ID] {
+			continue
+		}
+		a := old
+		normalizeHome(&a, &old, m)
+		seen[a.ID] = true
+		if rendered := renderAgreement(a); rendered != "" {
+			body += "\n" + rendered
 		}
 	}
 	if utf8.RuneCountInString(body) > 1800 {
 		return "", fmt.Errorf("summary_too_long")
 	}
-	// Explicitly attributed quoted words in prose must also have a source.
-	quotes := proseQuotes.FindAllStringSubmatch(prose, -1)
-	for _, q := range quotes {
-		if !proseQuoteHasSource(q[1], m) {
-			return "", fmt.Errorf("unmatched_prose_quote")
+	return body, nil
+}
+
+// Rebase moves a snapshot's revision basis forward when only material outside
+// the summarized range changed, for example reply deliveries still being
+// recorded on the protected recent turns while a summary is generated. The
+// active version, coverage, newest turn number and every summarized past turn
+// must be unchanged; otherwise the snapshot stays stale and is rejected later.
+func (s *Store) Rebase(session string, m *Material) (bool, error) {
+	st, err := s.State(session)
+	if err != nil {
+		return false, err
+	}
+	if st.Version != m.Previous.Version || st.Covered != m.Previous.Covered {
+		return false, nil
+	}
+	if st.Revision == m.Previous.Revision {
+		return true, nil
+	}
+	var maxNumber int64
+	if err = s.DB.QueryRow("SELECT COALESCE(MAX(number),0) FROM context_turns WHERE session=?", session).Scan(&maxNumber); err != nil {
+		return false, err
+	}
+	if maxNumber != m.MaxNumber {
+		return false, nil
+	}
+	turns, err := s.Uncovered(session, st.Covered)
+	if err != nil {
+		return false, err
+	}
+	current := map[int64]Turn{}
+	for _, t := range turns {
+		current[t.Number] = t
+	}
+	for _, t := range m.Past {
+		now, ok := current[t.Number]
+		if !ok {
+			return false, nil
+		}
+		before, _ := json.Marshal(t)
+		after, _ := json.Marshal(now)
+		if string(before) != string(after) {
+			return false, nil
 		}
 	}
-	return body, nil
+	m.Previous.Revision = st.Revision
+	return true, nil
+}
+
+// homeVerified reports whether the quote is a contiguous excerpt of the named
+// current canonical file.
+func homeVerified(home, quote string, m Material) bool {
+	if home == "" || strings.TrimSpace(quote) == "" {
+		return false
+	}
+	text, ok := m.Homes[home]
+	return ok && strings.Contains(text, quote)
+}
+
+// normalizeHome keeps a home only while it can be verified against the current
+// canonical files. Profile files are rewritten over time, so an unverifiable
+// home never rejects a candidate: the agreement keeps its sourced content and
+// falls back to the prior verified home, or to rendering in the summary.
+func normalizeHome(a *Agreement, prior *Agreement, m Material) {
+	if homeVerified(a.Home, a.HomeQuote, m) {
+		return
+	}
+	if prior != nil && homeVerified(prior.Home, prior.HomeQuote, m) {
+		a.Home, a.HomeQuote = prior.Home, prior.HomeQuote
+		return
+	}
+	a.Home, a.HomeQuote = "", ""
+}
+
+// relaxUnmatchedProseQuotes keeps the words of an unsourced quotation and
+// removes only its quote marks. A fragment found in the allowed sources stays quoted.
+func relaxUnmatchedProseQuotes(prose string, m Material) string {
+	return proseQuotes.ReplaceAllStringFunc(prose, func(match string) string {
+		inner := proseQuotes.FindStringSubmatch(match)
+		if len(inner) < 2 || proseQuoteHasSource(inner[1], m) {
+			return match
+		}
+		return inner[1]
+	})
 }
 
 func (s *Store) SeedLegacy(scope Scope, body string) error {
@@ -326,7 +479,7 @@ func (s *Store) RecordCandidate(session string, m Material, c Candidate, raw, bo
 				}
 			}
 			prior, exists := old[a.ID]
-			if exists && (prior.Text != a.Text || prior.State != a.State || prior.Home != a.Home) {
+			if exists && (prior.Text != a.Text || prior.State != a.State) {
 				changed := false
 				boundary := m.Previous.Covered
 				for _, q := range append(append([]Quote(nil), prior.Sources...), prior.ChangedBy...) {
@@ -346,6 +499,10 @@ func (s *Store) RecordCandidate(session string, m Material, c Candidate, raw, bo
 					}
 				}
 			}
+			if !exists && a.State != "active" && len(a.ChangedBy) == 0 {
+				// Validate already left this new agreement out of the summary.
+				continue
+			}
 			if !exists && a.State != "active" {
 				changed := false
 				for _, q := range a.ChangedBy {
@@ -355,11 +512,10 @@ func (s *Store) RecordCandidate(session string, m Material, c Candidate, raw, bo
 				}
 				valid = valid && changed
 			}
-			if a.Home != "" {
-				home, ok := m.Homes[a.Home]
-				if !ok || strings.TrimSpace(a.HomeQuote) == "" || !strings.Contains(home, a.HomeQuote) {
-					valid = false
-				}
+			if exists {
+				normalizeHome(&a, &prior, m)
+			} else {
+				normalizeHome(&a, nil, m)
 			}
 			if accepted || valid {
 				data, _ := json.Marshal(a)

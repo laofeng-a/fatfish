@@ -61,17 +61,18 @@ func readSources(turn Turn) []ModelReference {
 }
 
 type ModelMaterial struct {
-	Previous   *State          `json:"previous_accepted"`
-	Legacy     string          `json:"legacy_unverified_reference,omitempty"`
-	Agreements []Agreement     `json:"confirmed_agreements"`
-	Quotes     []Quote         `json:"verified_previous_quotes"`
-	Past       []ModelDialogue `json:"past_dialogue"`
-	Recent     []ModelDialogue `json:"recent_corrections_only"`
-	From       int64           `json:"allowed_from"`
-	To         int64           `json:"allowed_to"`
-	Template   Candidate       `json:"candidate_template"`
-	Rejection  string          `json:"previous_rejection_reason,omitempty"`
-	Contract   string          `json:"output_contract"`
+	Previous   *State            `json:"previous_accepted"`
+	Legacy     string            `json:"legacy_unverified_reference,omitempty"`
+	Agreements []Agreement       `json:"confirmed_agreements"`
+	Quotes     []Quote           `json:"verified_previous_quotes"`
+	Past       []ModelDialogue   `json:"past_dialogue"`
+	Recent     []ModelDialogue   `json:"recent_corrections_only"`
+	From       int64             `json:"allowed_from"`
+	To         int64             `json:"allowed_to"`
+	Template   Candidate         `json:"candidate_template"`
+	Rejection  string            `json:"previous_rejection_reason,omitempty"`
+	Contract   string            `json:"output_contract"`
+	Homes      map[string]string `json:"canonical_homes,omitempty"`
 }
 
 func modelDialogue(turns []Turn, thoughts bool) []ModelDialogue {
@@ -99,7 +100,7 @@ func modelDialogue(turns []Turn, thoughts bool) []ModelDialogue {
 }
 
 func ModelMaterials(m Material) ModelMaterial {
-	wire := ModelMaterial{Agreements: m.Previous.Agreements, Quotes: m.Previous.Quotes, Past: modelDialogue(m.Past, true), Recent: modelDialogue(m.Recent, false), From: m.From, To: m.To, Rejection: m.Rejection, Template: Candidate{From: m.From, To: m.To, Quotes: []Quote{}, Agreements: m.Previous.Agreements}}
+	wire := ModelMaterial{Agreements: m.Previous.Agreements, Quotes: m.Previous.Quotes, Past: modelDialogue(m.Past, true), Recent: modelDialogue(m.Recent, false), From: m.From, To: m.To, Rejection: m.Rejection, Template: Candidate{From: m.From, To: m.To, Quotes: []Quote{}, Agreements: m.Previous.Agreements}, Homes: m.Homes}
 	wire.Contract = fmt.Sprintf("现在请生成候选JSON。本次新增过往范围为#%d至#%d；近期材料仅校正约定。quotes选少量原话，summary用{{q1}}等占位符插入原话，程序会加入实际说话人与逐字原文；其余内容用概括叙述。渲染后的正文与约定合计最多1800字。", m.From, m.To)
 	if m.Previous.Version > 0 {
 		previous := m.Previous

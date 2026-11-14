@@ -62,12 +62,20 @@ func TestLegacyQuoteEvidenceUsesActualSpeakerAndFixedNumber(t *testing.T) {
 func TestLegacyBodyCannotVerifyItsOwnUnmatchedQuotes(t *testing.T) {
 	m := Material{Previous: State{Covered: 5, Body: "未经核对的旧文声称“虚构原话内容”。"}, From: 6, To: 6, Past: []Turn{{Number: 6, Kind: "human", User: "这是真实新增原话", Complete: true}}}
 	c := Candidate{From: 6, To: 6, Summary: "沿用“虚构原话内容”这一说法。"}
-	if _, err := Validate(c, m, "stop"); err == nil {
-		t.Fatal("unverified old summary proved its own quote")
+	body, err := Validate(c, m, "stop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(body, "“虚构原话内容”") || !strings.Contains(body, "虚构原话内容") {
+		t.Fatal("unsourced quotation was kept or its words were dropped", body)
 	}
 	m.Previous.Quotes = []Quote{{Turn: 3, Speaker: "jg", Text: "虚构原话内容"}}
-	if _, err := Validate(c, m, "stop"); err != nil {
+	body, err = Validate(c, m, "stop")
+	if err != nil {
 		t.Fatal("a separately verified old source was rejected", err)
+	}
+	if !strings.Contains(body, "“虚构原话内容”") {
+		t.Fatal("sourced quotation lost its marks", body)
 	}
 }
 

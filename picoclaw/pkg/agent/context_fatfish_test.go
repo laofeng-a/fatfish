@@ -267,60 +267,46 @@ func TestFatfishReformLegacyBodyIsLabeledWithoutChangingStoredVersion(t *testing
 	}
 }
 
-func TestFatfishReformQuoteRepairIsBoundedAndKeepsBothDrafts(t *testing.T) {
-	for _, succeeds := range []bool{true, false} {
-		t.Run(fmt.Sprintf("repair_success_%t", succeeds), func(t *testing.T) {
-			m, a := reformFixture(t)
-			m.keepRecent = 1
-			key := "repair"
-			for i := 1; i <= 3; i++ {
-				a.Sessions.AddFullMessage(key, providers.Message{Role: "user", Content: fmt.Sprintf("真实原话%d", i), SourceKind: "human", SourceChatID: "123", SourceChannel: "telegram", SourceMessageID: fmt.Sprint(i)})
-			}
-			if _, err := m.sync(a, key, true); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := m.store.DB.Exec("UPDATE context_turns SET kind='human' WHERE session=?", key); err != nil {
-				t.Fatal(err)
-			}
-			if err := m.store.SeedLegacy(contextledger.Scope{Session: key}, "旧摘要仍然保留"); err != nil {
-				t.Fatal(err)
-			}
-			before, _ := m.store.State(key)
-			rawCount := len(a.Sessions.GetHistory(key))
-			calls := 0
-			a.Provider = &reformProvider{fn: func(messages []providers.Message) (*providers.LLMResponse, error) {
-				calls++
-				var material contextledger.Material
-				if err := json.Unmarshal([]byte(messages[1].Content), &material); err != nil {
-					return nil, err
-				}
-				if calls == 2 && (len(messages) != 4 || !strings.Contains(messages[3].Content, "未记录的原话内容")) {
-					t.Fatal("repair did not receive the exact validation failure")
-				}
-				c := contextledger.Candidate{From: material.From, To: material.To, Summary: "jg说“未记录的原话内容”。"}
-				if calls == 2 && succeeds {
-					c.Summary = "jg说清了实际需要，随后双方接着交流。"
-				}
-				raw, _ := json.Marshal(c)
-				return &providers.LLMResponse{Content: string(raw), FinishReason: "stop"}, nil
-			}}
-			err := m.generate(context.Background(), key)
-			if (err == nil) != succeeds || calls != 2 {
-				t.Fatalf("result=%v provider_calls=%d", err, calls)
-			}
-			var total, rejected int
-			m.store.DB.QueryRow("SELECT count(*),sum(status='rejected') FROM context_summaries WHERE session=?", key).Scan(&total, &rejected)
-			if total != 2 || rejected < 1 {
-				t.Fatal("a draft or rejection was discarded", total, rejected)
-			}
-			after, _ := m.store.State(key)
-			if succeeds {
-				if after.Version == 0 || after.Covered <= before.Covered {
-					t.Fatal("valid repair did not activate")
-				}
-			} else if after.Body != before.Body || after.Version != before.Version || after.Covered != before.Covered || after.Cooldown < float64(time.Now().Add(9*time.Minute).Unix()) || len(a.Sessions.GetHistory(key)) != rawCount {
-				t.Fatal("failed repair changed the active source", after)
-			}
-		})
+// Unsourced quotation marks in prose are relaxed to paraphrase instead of
+// rejecting the whole candidate, so no correction call is spent on them.
+// Failed corrections keeping the active source are covered by
+// TestFatfishSummaryRepairsRecordedFailureKinds/quote_still_invalid.
+func TestFatfishReformUnsourcedProseQuoteIsRelaxedWithoutRepair(t *testing.T) {
+	m, a := reformFixture(t)
+	m.keepRecent = 1
+	key := "repair"
+	for i := 1; i <= 3; i++ {
+		a.Sessions.AddFullMessage(key, providers.Message{Role: "user", Content: fmt.Sprintf("真实原话%d", i), SourceKind: "human", SourceChatID: "123", SourceChannel: "telegram", SourceMessageID: fmt.Sprint(i)})
+	}
+	if _, err := m.sync(a, key, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.store.DB.Exec("UPDATE context_turns SET kind='human' WHERE session=?", key); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.store.SeedLegacy(contextledger.Scope{Session: key}, "旧摘要仍然保留"); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := m.store.State(key)
+	calls := 0
+	a.Provider = &reformProvider{fn: func(messages []providers.Message) (*providers.LLMResponse, error) {
+		calls++
+		var material contextledger.Material
+		if err := json.Unmarshal([]byte(messages[1].Content), &material); err != nil {
+			return nil, err
+		}
+		c := contextledger.Candidate{From: material.From, To: material.To, Summary: "jg说“真实原话1”，又提到“未记录的原话内容”。"}
+		raw, _ := json.Marshal(c)
+		return &providers.LLMResponse{Content: string(raw), FinishReason: "stop"}, nil
+	}}
+	if err := m.generate(context.Background(), key); err != nil || calls != 1 {
+		t.Fatalf("result=%v provider_calls=%d", err, calls)
+	}
+	after, _ := m.store.State(key)
+	if after.Version == 0 || after.Covered <= before.Covered {
+		t.Fatal("relaxed candidate did not activate", after)
+	}
+	if !strings.Contains(after.Body, "“真实原话1”") || strings.Contains(after.Body, "“未记录的原话内容”") || !strings.Contains(after.Body, "未记录的原话内容") {
+		t.Fatal("sourced quote lost or unsourced quote kept its marks", after.Body)
 	}
 }

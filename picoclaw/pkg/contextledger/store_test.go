@@ -224,12 +224,16 @@ func TestCandidateDoesNotPublishRecentDialogueAsCoveredPast(t *testing.T) {
 	_, _, m, c := candidateFixture(t)
 	m.Recent = []Turn{{Number: 2, Kind: "human", User: "近期还没转入过往区的原话", Complete: true}}
 	c.Summary = "后来jg说“近期还没转入过往区的原话”。"
-	if _, err := Validate(c, m, "stop"); err == nil {
-		t.Fatal("recent-only quote copied into covered past")
+	body, err := Validate(c, m, "stop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(body, "“近期还没转入过往区的原话”") || !strings.Contains(body, "近期还没转入过往区的原话") {
+		t.Fatal("recent-only words were published as a quotation", body)
 	}
 	c.Summary = "过去的真实经过。"
 	c.Quotes = []Quote{{Turn: 2, Speaker: "jg", Text: "近期还没转入过往区的原话"}}
-	if _, err := Validate(c, m, "stop"); err == nil {
+	if _, err = Validate(c, m, "stop"); err == nil {
 		t.Fatal("recent-only quote claimed as covered source")
 	}
 }
@@ -238,8 +242,9 @@ func TestKnownAgreementRequiresPreservationAndNewChangeEvidence(t *testing.T) {
 	_, _, m, c := candidateFixture(t)
 	old := Agreement{ID: "task", Text: "处理原任务", State: "active", Sources: []Quote{{Turn: 1, Speaker: "jg", Text: "可以开始"}}}
 	m.Previous.Agreements = []Agreement{old}
-	if _, err := Validate(c, m, "stop"); err == nil {
-		t.Fatal("lost agreement accepted")
+	// An omitted known agreement is carried unchanged by the program.
+	if body, err := Validate(c, m, "stop"); err != nil || !strings.Contains(body, "处理原任务") {
+		t.Fatal("omitted agreement was not carried", body, err)
 	}
 	changed := old
 	changed.State = "completed"

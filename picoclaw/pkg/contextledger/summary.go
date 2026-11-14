@@ -16,13 +16,15 @@ type Quote struct {
 	Text    string `json:"text"`
 }
 type Agreement struct {
-	ID        string  `json:"id"`
-	Text      string  `json:"text"`
-	State     string  `json:"state"`
-	Sources   []Quote `json:"sources"`
-	ChangedBy []Quote `json:"changed_by,omitempty"`
-	Home      string  `json:"home,omitempty"`
-	HomeQuote string  `json:"home_quote,omitempty"`
+	ID              string  `json:"id"`
+	Text            string  `json:"text"`
+	State           string  `json:"state"`
+	Sources         []Quote `json:"sources"`
+	ChangedBy       []Quote `json:"changed_by,omitempty"`
+	Home            string  `json:"home,omitempty"`
+	HomeQuote       string  `json:"home_quote,omitempty"`
+	TerminalSince   int64   `json:"terminal_since,omitempty"`
+	ArchivedVersion int64   `json:"archived_version,omitempty"`
 }
 type Candidate struct {
 	Summary    string      `json:"summary"`
@@ -211,7 +213,7 @@ func validQuote(q Quote, m Material) bool {
 }
 
 func renderAgreement(a Agreement) string {
-	if a.Home != "" {
+	if a.ArchivedVersion > 0 || (a.State != "active" && a.TerminalSince > 0) || (a.State == "active" && a.Home != "") {
 		return ""
 	}
 	var sources []string
@@ -315,9 +317,9 @@ func Validate(c Candidate, m Material, finish string) (string, error) {
 			continue
 		}
 		if old, ok := previous[a.ID]; ok {
-			normalizeHome(&a, &old, m)
+			normalizeAgreement(&a, &old, m)
 		} else {
-			normalizeHome(&a, nil, m)
+			normalizeAgreement(&a, nil, m)
 		}
 		c.Agreements[i] = a
 		seen[a.ID] = true
@@ -332,7 +334,7 @@ func Validate(c Candidate, m Material, finish string) (string, error) {
 			continue
 		}
 		a := old
-		normalizeHome(&a, &old, m)
+		normalizeAgreement(&a, &old, m)
 		seen[a.ID] = true
 		if rendered := renderAgreement(a); rendered != "" {
 			body += "\n" + rendered
@@ -400,11 +402,16 @@ func homeVerified(home, quote string, m Material) bool {
 	return ok && strings.Contains(text, quote)
 }
 
-// normalizeHome keeps a home only while it can be verified against the current
+// normalizeAgreement takes lifecycle markers only from the stored agreement.
+// It keeps a home only while it can be verified against the current
 // canonical files. Profile files are rewritten over time, so an unverifiable
 // home never rejects a candidate: the agreement keeps its sourced content and
 // falls back to the prior verified home, or to rendering in the summary.
-func normalizeHome(a *Agreement, prior *Agreement, m Material) {
+func normalizeAgreement(a *Agreement, prior *Agreement, m Material) {
+	a.TerminalSince, a.ArchivedVersion = 0, 0
+	if prior != nil && prior.State != "active" && a.State != "active" {
+		a.TerminalSince = prior.TerminalSince
+	}
 	if homeVerified(a.Home, a.HomeQuote, m) {
 		return
 	}
@@ -471,7 +478,19 @@ func (s *Store) RecordCandidate(session string, m Material, c Candidate, raw, bo
 		for _, a := range m.Previous.Agreements {
 			old[a.ID] = a
 		}
-		for _, a := range c.Agreements {
+		carried := append([]Agreement(nil), c.Agreements...)
+		if accepted {
+			seen := map[string]bool{}
+			for _, a := range carried {
+				seen[a.ID] = true
+			}
+			for _, a := range m.Previous.Agreements {
+				if !seen[a.ID] {
+					carried = append(carried, a)
+				}
+			}
+		}
+		for _, a := range carried {
 			valid := a.ID != "" && a.Text != "" && (a.State == "active" || a.State == "completed" || a.State == "revoked" || a.State == "superseded") && len(a.Sources) > 0
 			for _, q := range a.Sources {
 				if !validQuote(q, m) {
@@ -513,11 +532,18 @@ func (s *Store) RecordCandidate(session string, m Material, c Candidate, raw, bo
 				valid = valid && changed
 			}
 			if exists {
-				normalizeHome(&a, &prior, m)
+				normalizeAgreement(&a, &prior, m)
 			} else {
-				normalizeHome(&a, nil, m)
+				normalizeAgreement(&a, nil, m)
 			}
 			if accepted || valid {
+				if accepted && a.State != "active" {
+					if a.TerminalSince == 0 {
+						a.TerminalSince = id
+					} else if a.TerminalSince < id {
+						a.ArchivedVersion = id
+					}
+				}
 				data, _ := json.Marshal(a)
 				if _, err = tx.Exec("INSERT INTO context_agreements(session,id,data) VALUES(?,?,?) ON CONFLICT(session,id) DO UPDATE SET data=excluded.data", session, a.ID, string(data)); err != nil {
 					return 0, err

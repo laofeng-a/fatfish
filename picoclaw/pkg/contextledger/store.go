@@ -456,6 +456,9 @@ func (s *Store) State(session string) (State, error) {
 		if err = json.Unmarshal([]byte(text), &a); err != nil {
 			return st, err
 		}
+		if a.ArchivedVersion > 0 {
+			continue
+		}
 		st.Agreements = append(st.Agreements, a)
 	}
 	err = rows.Err()

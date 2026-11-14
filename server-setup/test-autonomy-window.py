@@ -153,5 +153,26 @@ class AutonomyWindowRuntimeTests(unittest.TestCase):
             result=self.r.call('autonomy',{'action':'skip_next','_context':self.ctx})
         self.assertEqual(result['next_due'],at('2026-11-07T18:00:00'));self.assertEqual(result['enabled'],1)
 
+    def test_noon_slots_and_evening_window_share_the_daily_schedule(self):
+        self.r.loops.daily_window=DailyWindow(dict(SPEC,extra_times=['13:00','12:30']))
+        self.assertIsNone(self.claim('2026-11-06T22:00:00'))
+        with self.r.db() as db:
+            self.assertEqual(db.execute('SELECT next_due FROM loop_autonomy').fetchone()[0],at('2026-11-07T12:30:00'))
+        self.assertIsNone(self.claim('2026-11-07T12:29:59'))
+        self.assertEqual(self.claim('2026-11-07T12:30:53',2)['kind'],'autonomy')
+        self.assertIsNone(self.claim('2026-11-07T12:59:59'))
+        self.assertEqual(self.claim('2026-11-07T13:00:53',3)['kind'],'autonomy')
+        with self.r.db() as db:
+            self.assertEqual(db.execute('SELECT next_due FROM loop_autonomy').fetchone()[0],at('2026-11-07T18:00:00'))
+        self.assertEqual(self.claim('2026-11-07T18:00:53',4)['kind'],'autonomy')
+
+    def test_skip_one_noon_slot_keeps_the_other(self):
+        self.r.loops.daily_window=DailyWindow(dict(SPEC,extra_times=['12:30','13:00']))
+        with self.r.db() as db:
+            db.execute('UPDATE loop_autonomy SET next_due=?',(at('2026-11-06T12:30:00'),))
+        with patch('agent_loops.time.time',return_value=at('2026-11-06T12:00:00')):
+            result=self.r.call('autonomy',{'action':'skip_next','_context':self.ctx})
+        self.assertEqual(result['next_due'],at('2026-11-06T13:00:00'))
+
 
 if __name__=='__main__':unittest.main(verbosity=2)

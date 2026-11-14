@@ -1,8 +1,10 @@
-"""One nullable companionship deadline, driven only by real delivery receipts."""
+"""One companionship deadline, set explicitly or by a confirmed delivery."""
 import json
 import time
 
-INTERVAL_SECONDS=120
+from reminders import Reminders
+
+INTERVAL_SECONDS=60
 
 
 class CompanionCadence:
@@ -30,6 +32,7 @@ class CompanionCadence:
     def disarm(self,db,reason):
         old=self.get(db,'next_chat_due')
         self.put(db,'next_chat_due',None)
+        self.put(db,'companion_due_explicit',False)
         if old is not None:self.audit(db,'cancelled',reason=reason,previous_due=old)
 
     def inbound(self,db,message):
@@ -39,19 +42,50 @@ class CompanionCadence:
         self.disarm(db,'new_human_message')
         self.put(db,'companion_source',{'version':old.get('version',0)+1,'source_id':latest['id'],'source_message_id':latest['msg']})
 
-    def window_open(self,db,now):
+    def available(self,db):
         auto=db.execute('SELECT enabled,epoch FROM loop_autonomy WHERE id=1').fetchone()
-        return bool(self.enabled and auto['enabled'] and self.r._get(db,'paused','0')!='1'
-                    and self.r.loops.daily_window.contains(now))
+        return bool(self.enabled and auto['enabled'] and self.r._get(db,'paused','0')!='1')
+
+    def configure(self,db,args,context):
+        if not self.available(db):
+            raise ValueError('陪聊当前未开启或已暂停')
+        latest=self.latest(db)
+        human=self.r.loops.source(db,context)
+        wake=self.wake_id(context)
+        current_wake=self.claim_for(db,wake) is not None and not self.send_gate(db,context)
+        if not self.r.loops.admitted(db,context) or (human.get('id')!=latest['id'] and not current_wake):
+            raise ValueError('请在当前真人私聊、陪聊或自由活动回合安排陪聊')
+
+        if args['action']=='chat_cancel':
+            self.disarm(db,'explicit_cancel')
+            self.put(db,'companion_cancelled_source_id',latest['id'])
+            return
+
+        has_time='delay_seconds' in args or 'due_at' in args
+        if not has_time and 'interval_seconds' not in args:
+            raise ValueError('请填写delay_seconds、due_at或interval_seconds')
+        interval=args.get('interval_seconds',self.interval(db))
+        if type(interval) is not int or not INTERVAL_SECONDS<=interval<=366*86400:
+            raise ValueError('陪聊间隔最短60秒，最长一年')
+        now=time.time()
+        due=Reminders.parse_due(args,now) if has_time else now+interval
+        if due-now<INTERVAL_SECONDS:
+            raise ValueError('下次陪聊至少在60秒后')
+
+        self.put(db,'companion_interval_seconds',interval)
+        self.put(db,'companion_cancelled_source_id',None)
+        self.put(db,'next_chat_due',due)
+        self.put(db,'companion_due_explicit',True)
+        self.audit(db,'scheduled',due=due,interval_seconds=interval,source_id=latest['id'],wake_id=wake)
+
+    def interval(self,db):
+        return self.get(db,'companion_interval_seconds',INTERVAL_SECONDS)
 
     def peek(self,db,now=None):
         now=time.time()if now is None else now;due=self.get(db,'next_chat_due')
         if due is None:return False
-        if not self.window_open(db,now):
-            self.disarm(db,'window_or_master_closed');return False
-        window=self.r.loops.daily_window
-        if window.view() and window.bounds(due)!=window.bounds(now):
-            self.disarm(db,'previous_day_plan');return False
+        if not self.available(db):
+            self.disarm(db,'master_closed_or_paused');return False
         return due<=now
 
     def capture(self,db,wake,now):
@@ -65,14 +99,15 @@ class CompanionCadence:
     def claim(self,db,wake,now):
         if not self.peek(db,now):return None
         due=self.get(db,'next_chat_due');self.put(db,'next_chat_due',None)
+        self.put(db,'companion_due_explicit',False)
         record=self.capture(db,wake,now);epoch=record['epoch']
         db.execute('INSERT INTO loop_wakes VALUES(?,NULL,?,?)',(wake,epoch,'chat'))
         db.execute('INSERT INTO wakes(id,created,day,kind)VALUES(?,?,?,?)',(wake,now,time.strftime('%Y-%m-%d'),'chat'))
         self.audit(db,'claimed',wake_id=wake,scheduled_at=due,started_at=now,delay_seconds=round(now-due,3))
         recent=[dict(row)for row in db.execute("SELECT id,msg,kind,content,created FROM events WHERE chat=? AND kind IN ('user','forwarded','assistant') ORDER BY id DESC LIMIT 24",(self.r.owner,))]
         auto=db.execute('SELECT note FROM loop_autonomy WHERE id=1').fetchone()
-        context=('这是两分钟陪聊／自主活动机会，没有新的真人消息。接着最近真实交流，你可以补一句想说的话、接梗、分享，也可以阅读、探索、整理或做其他已授权且自己感兴趣的事；有想表达的就显式发送，没有也可安静结束。\n'
-                 '文本、表情、图片都可以表达。程序只按真实发送回执续排两分钟；正常结束没有发送就撤销这段临时陪聊，整点自由活动仍保留。两分钟计划由程序管理，沿用已配置的默认自由周期。内部结论只留内部，不把活动判断当作对jg的正文。\n'
+        context=('这是陪聊／自主活动机会，没有新的真人消息。接着最近真实交流，你可以补一句想说的话、接梗、分享，也可以阅读、探索、整理或做其他已授权且自己感兴趣的事；有想表达的就显式发送，没有也可安静结束。\n'
+                 f'文本、表情、图片都可以表达。真实发送后按当前{self.interval(db)}秒间隔续排；安静结束时，临时链自然停止。想约个时间再来，可以用autonomy的chat_schedule设置下次，或用chat_cancel取消。内部结论留内部。\n'
                  '最近真实往来（按时间）：'+json.dumps(list(reversed(recent)),ensure_ascii=False)+'\n已有活动续记：'+auto['note']+
                  '\n相关记忆线索：'+self.r.memory_recall.background_context(db,self.r.owner))
         return {'allowed':True,'silent':True,'wake_id':wake,'kind':'chat','session_key':'agent:autonomy-'+str(epoch),'context':context}
@@ -107,7 +142,9 @@ class CompanionCadence:
         record=self.claim_for(db,self.wake_id(data))
         if record is not None:
             record['blocked']=True;self.put(db,'companion_current_claim',record)
-            self.disarm(db,'internal_note_filtered');self.audit(db,'filtered',wake_id=record['wake_id'])
+            if not self.get(db,'companion_due_explicit',False):
+                self.disarm(db,'internal_note_filtered')
+            self.audit(db,'filtered',wake_id=record['wake_id'])
 
     def turn_blocked(self,db,data):
         source=str(data.get('message_id')or data.get('turn')or data.get('session_key')or'')
@@ -141,8 +178,10 @@ class CompanionCadence:
         if record['epoch']!=auto['epoch']or record['version']!=current.get('version',0)or record['source_id']!=latest['id']:return
         claim=self.claim_for(db,record.get('wake_id'))
         if claim and (claim.get('blocked')or claim.get('stale')):return
-        due=now+INTERVAL_SECONDS
-        if not self.window_open(db,now)or not self.r.loops.daily_window.contains(due):return
+        if not self.available(db):return
+        if self.get(db,'companion_due_explicit',False):return
+        if self.get(db,'companion_cancelled_source_id')==latest['id']:return
+        due=now+self.interval(db)
         self.put(db,'next_chat_due',due)
         self.audit(db,'armed',ticket=ticket,message_ids=ids,due=due,source_id=record['source_id'])
 
@@ -151,13 +190,17 @@ class CompanionCadence:
         if record is None:return
         row=db.execute('SELECT contacted FROM wakes WHERE id=?',(wake,)).fetchone()
         disposition='filtered'if record.get('blocked')else ('sent'if row and row['contacted']else ('quiet'if outcome=='completed'else 'failed'))
-        if disposition in ('quiet','failed','filtered')and record.get('version')==self.source(db).get('version',0):self.disarm(db,disposition)
+        if (disposition in ('quiet','failed','filtered')
+                and record.get('version')==self.source(db).get('version',0)
+                and not self.get(db,'companion_due_explicit',False)):
+            self.disarm(db,disposition)
         self.audit(db,'finished',wake_id=wake,disposition=disposition,outcome=outcome)
 
     def status(self,db):
-        return {'enabled':self.enabled,'next_chat_due':self.get(db,'next_chat_due'),'interval_seconds':INTERVAL_SECONDS}
+        return {'enabled':self.enabled,'next_chat_due':self.get(db,'next_chat_due'),
+                'interval_seconds':self.interval(db),'explicit':self.get(db,'companion_due_explicit',False)}
 
     def legacy_chat_request(self,args):
         with self.r.db()as db:
             result=self.status(db)
-        return dict(result,managed=True,note='陪聊共用一份两分钟计划，由真实交流和发送回执自动续排；这次调用不修改默认自由活动周期。')
+        return dict(result,managed=True,note='用autonomy的chat_schedule或chat_cancel管理陪聊计划。')

@@ -363,6 +363,8 @@ class AgentLoops:
                 # authority comes from the real user message, not a magic phrase.
                 if action=='enable' and user_switch(text) is False:raise ValueError('jg当前要求关闭，不能恢复')
                 self.switch(db,action=='enable',text,source)
+            elif action in ('chat_schedule','chat_cancel'):
+                self.r.companion.configure(db,args,context)
             elif action=='adjust':
                 if not self.active(db,epoch):raise ValueError('自主活动已关闭，恢复由jg决定')
                 interval=args.get('interval_seconds',state['interval_seconds']);due=state['next_due']
@@ -381,7 +383,8 @@ class AgentLoops:
                 db.execute('UPDATE loop_autonomy SET interval_seconds=?,next_due=? WHERE id=1',(interval,due))
             elif action=='skip_next':
                 if not self.active(db,epoch):raise ValueError('自主活动已关闭，恢复由jg决定')
-                db.execute('UPDATE loop_autonomy SET next_due=? WHERE id=1',(self.daily_window.constrain(max(time.time(),state['next_due'])+state['interval_seconds']),))
+                due = self.daily_window.next_slot(max(time.time(),state['next_due']),state['interval_seconds'])
+                db.execute('UPDATE loop_autonomy SET next_due=? WHERE id=1',(due,))
             elif action=='note':
                 if not self.active(db,epoch):raise ValueError('自主活动已关闭')
                 note=str(args.get('note',''))[:3000]

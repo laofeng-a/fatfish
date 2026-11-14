@@ -5,9 +5,29 @@ import os
 from pathlib import Path
 import tempfile
 import time
+from memory_recall import freshness,normalized,terms
 
 UTC8=dt.timezone(dt.timedelta(hours=8))
 EXPRESSION_PREFIX='表达经验（模型归纳）：'
+EXPRESSION_LIMIT=3
+# Grammatical fragments such as “的不” or “可以” are not evidence of a situation.
+EXPRESSION_FUNCTION_CHARS=frozenset('的了着过地得吗嘛呢吧啊呀哦嗯哈嘿是在有也又就都很更太最这那你我他她它们不没还把被给让来去和与或但要会能想可以于为个些么什现咯')
+
+
+def expression_match(content,quote,query):
+    query=normalized(query[:120].strip())
+    keys=[key for key in terms(query) if key!='jg' and any(c not in EXPRESSION_FUNCTION_CHARS for c in key)]
+    if not keys:return 0.0
+    # The situation and its real source quote are cues; the suggested response
+    # after the arrow is guidance, not evidence that this situation is happening.
+    situation=content[len(EXPRESSION_PREFIX):].split('→',1)[0]
+    cues=normalized(situation+'\n'+quote)
+    hits=[key for key in keys if key in cues]
+    if not hits:return 0.0
+    query_chars={c for key in keys for c in key if c not in EXPRESSION_FUNCTION_CHARS}
+    hit_chars={c for key in hits for c in key if c not in EXPRESSION_FUNCTION_CHARS}
+    coverage=len(hit_chars)/len(query_chars)
+    return coverage if coverage>=0.35 else 0.0
 
 
 def revised_reference(text,previous,current):
@@ -105,8 +125,20 @@ class MemoryLearning:
 
     def expression_context(self,db,chat,text):
         if not text.strip():return ''
-        rows=self.r.memory_recall.find({'query':text,'category':'interaction','limit':12},chat,db)
-        selected=[row for row in rows if row['content'].startswith(EXPRESSION_PREFIX)][:2]
+        now=time.time();ranked=[]
+        rows=db.execute('''SELECT m.*,COALESCE(s.importance,0.5) AS importance,
+            COALESCE(s.activation,1) AS activation,s.activation_at
+            FROM memories m LEFT JOIN memory_salience s ON s.memory_id=m.id
+            WHERE m.chat=? AND m.category='interaction' AND m.active=1
+            AND (m.expires IS NULL OR m.expires>?)''',(chat,now))
+        for raw in rows:
+            row=dict(raw)
+            if not row['content'].startswith(EXPRESSION_PREFIX):continue
+            coverage=expression_match(row['content'],row['quote'],text)
+            if not coverage:continue
+            score=coverage*(0.8+0.15*freshness(row,now)+0.05*row['importance'])
+            ranked.append((score,row['created'],row['id'],row))
+        selected=[item[3] for item in sorted(ranked,key=lambda item:item[:3],reverse=True)[:EXPRESSION_LIMIT]]
         if not selected:return ''
         return ('[当前相关的表达经验]\n这是从真实互动归纳的参考，结合眼下的话用自己的方式接；不是固定台词。\n'+
                 json.dumps([{'id':r['id'],'experience':r['content'][:360],'source_id':r['source_id'],'quote':r['quote'][:160]} for r in selected],ensure_ascii=False))

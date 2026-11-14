@@ -37,6 +37,9 @@ func TestFatfishTurnEventUsesMetadataAndUpdatedSteering(t *testing.T) {
 			if !strings.Contains(got[1].Content, `"kind":"`+tc.want+`"`) || got[0].Content != messages[0].Content || len(messages) != 1 {
 				t.Fatalf("source guessed from wording or input changed: %+v", got)
 			}
+			if tc.name == "companion" && (strings.Contains(got[1].Content, "两分钟") || !strings.Contains(got[1].Content, "自主陪聊机会")) {
+				t.Fatalf("companion event contains stale interval: %s", got[1].Content)
+			}
 		})
 	}
 	ts := &turnState{opts: processOptions{Dispatch: DispatchRequest{InboundContext: &bus.InboundContext{MessageID: "heartbeat:a", SenderID: "heartbeat"}}}}

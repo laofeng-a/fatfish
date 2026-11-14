@@ -1,4 +1,4 @@
-"""Integration checks for one shared, receipt-driven two-minute chat deadline."""
+"""Integration checks for one shared, receipt-driven one-minute chat deadline."""
 import datetime as dt
 import json
 from pathlib import Path
@@ -61,13 +61,13 @@ class CompanionCadenceTests(unittest.TestCase):
         return decision,{'channel':'telegram','chat_id':'123','sender_id':'heartbeat',
                          'session_key':decision['session_key'],'message_id':'heartbeat:'+wake}
 
-    def test_only_confirmed_real_reply_arms_two_minutes(self):
+    def test_only_confirmed_real_reply_arms_one_minute(self):
         context=self.inbound()
         self.assertIsNone(self.deadline())
         reserved=self.reserve(context)
         self.assertIsNone(self.deadline(),'Intent to send is not a delivery receipt')
         self.complete(reserved['ticket'])
-        self.assertEqual(self.deadline(),self.now+120)
+        self.assertEqual(self.deadline(),self.now+60)
 
     def test_new_message_replaces_one_plan_after_the_new_reply(self):
         self.replied();self.now+=30
@@ -75,7 +75,7 @@ class CompanionCadenceTests(unittest.TestCase):
         self.assertIsNone(self.deadline(),'Old idle plan must not run during the new human turn')
         self.now+=8;reserved=self.reserve(context,text='接住新的一句')
         self.complete(reserved['ticket'])
-        self.assertEqual(self.deadline(),self.now+120)
+        self.assertEqual(self.deadline(),self.now+60)
 
     def test_failed_unknown_and_no_message_id_do_not_arm(self):
         for i,(status,ids)in enumerate([('rejected',[]),('unknown',[]),('sent',[])],1):
@@ -91,7 +91,7 @@ class CompanionCadenceTests(unittest.TestCase):
         self.assertIsNone(self.deadline())
         with self.r.db()as db:self.assertEqual(db.execute('SELECT enabled FROM loop_autonomy').fetchone()[0],1)
         ticket=self.reserve(context,text='接着你转来的内容')['ticket'];self.complete(ticket)
-        self.assertEqual(self.deadline(),self.now+120)
+        self.assertEqual(self.deadline(),self.now+60)
         self.now=self.deadline();decision,_=self.claim()
         self.assertIn('关闭自主活动',decision['context'])
         self.assertIn('"kind": "forwarded"',decision['context'])
@@ -100,7 +100,7 @@ class CompanionCadenceTests(unittest.TestCase):
         context=self.inbound()
         reserved=self.reserve(context,text='[表情：歪头]',kind='media')
         self.complete(reserved['ticket'],ids=['501'])
-        self.assertEqual(self.deadline(),self.now+120)
+        self.assertEqual(self.deadline(),self.now+60)
         context=self.inbound('2','哈哈')
         reserved=self.reserve(context,text='[消息反应：❤]',kind='reaction')
         self.complete(reserved['ticket'],ids=[])
@@ -142,7 +142,7 @@ class CompanionCadenceTests(unittest.TestCase):
         self.now+=7
         reserved=self.reserve(context,text='我又想到刚才那个玩笑了',origin='send_tool')
         self.complete(reserved['ticket'],ids=['601'])
-        self.assertEqual(self.deadline(),self.now+120)
+        self.assertEqual(self.deadline(),self.now+60)
 
     def test_internal_statement_is_not_sent_and_ends_this_tick(self):
         self.replied();self.now=self.deadline();_,context=self.claim()
@@ -203,13 +203,18 @@ class CompanionCadenceTests(unittest.TestCase):
         with self.r.db()as db:
             self.assertEqual(db.execute('SELECT enabled FROM loop_autonomy').fetchone()[0],0)
 
-    def test_daily_window_does_not_schedule_chat_past_2200(self):
+    def test_chat_can_schedule_outside_and_across_daily_window_and_midnight(self):
         self.settings['autonomy_daily_window']={'start':'18:00','end':'22:00','utc_offset_minutes':480}
         self.config.write_text(json.dumps(self.settings),encoding='utf-8');self.r=Runtime(self.config)
-        self.now=timestamp('21:59:00');self.replied()
-        self.assertIsNone(self.deadline())
-        self.now=timestamp('22:00:00')
-        self.assertFalse(self.r.action('chat_due',{})['chat_due'])
+        with self.r.db()as db:default_due=db.execute('SELECT next_due FROM loop_autonomy').fetchone()[0]
+        for number,clock in enumerate(['12:00:00','21:59:30','23:59:30'],1):
+            with self.subTest(clock=clock):
+                self.now=timestamp(clock);self.replied(str(number));expected=self.now+60
+                self.assertEqual(self.deadline(),expected)
+                self.now=expected;decision,_=self.claim(number)
+                self.r.action('wake_done',{'wake_id':decision['wake_id'],'outcome':'completed'})
+                self.assertIsNone(self.deadline())
+        with self.r.db()as db:self.assertEqual(db.execute('SELECT next_due FROM loop_autonomy').fetchone()[0],default_due)
 
     def test_legacy_chat_tool_cannot_change_default_free_period(self):
         context=self.inbound()
@@ -218,6 +223,46 @@ class CompanionCadenceTests(unittest.TestCase):
         self.assertTrue(result['managed'])
         with self.r.db()as db:self.assertEqual(dict(db.execute('SELECT * FROM loop_autonomy').fetchone()),before)
         self.assertIsNone(self.deadline())
+
+    def test_she_can_schedule_a_later_chat_and_finish_quietly(self):
+        self.replied();self.now=self.deadline();decision,context=self.claim()
+        result=self.r.call('autonomy',{'action':'chat_schedule','delay_seconds':600,'_context':context})
+        due=self.now+600
+        self.assertEqual(result['companion']['next_chat_due'],due)
+        self.r.action('wake_done',{'wake_id':decision['wake_id'],'outcome':'completed'})
+        self.assertEqual(self.deadline(),due)
+        self.now=due;decision,_=self.claim(2)
+        self.assertIsNone(self.deadline())
+
+    def test_explicit_time_takes_precedence_and_interval_applies_to_next_exchange(self):
+        self.now=timestamp('23:58:00');context=self.inbound()
+        result=self.r.call('autonomy',{'action':'chat_schedule','due_at':'2026-11-07T00:10:00+08:00',
+                                      'interval_seconds':180,'_context':context})
+        self.assertEqual(result['companion']['next_chat_due'],self.now+720)
+        self.complete(self.reserve(context)['ticket'])
+        self.assertEqual(self.deadline(),self.now+720)
+        self.replied('2')
+        self.assertEqual(self.deadline(),self.now+180)
+
+    def test_cancel_acknowledgement_does_not_rearm(self):
+        self.replied();context=self.inbound('2','取消下一次陪聊')
+        self.r.call('autonomy',{'action':'chat_cancel','_context':context})
+        self.complete(self.reserve(context)['ticket'])
+        self.assertIsNone(self.deadline())
+        self.replied('3')
+        self.assertEqual(self.deadline(),self.now+60)
+
+    def test_schedule_checks_minimum_and_rejects_finished_or_disabled_sources(self):
+        context=self.inbound()
+        with self.assertRaisesRegex(ValueError,'至少在60秒后'):
+            self.r.call('autonomy',{'action':'chat_schedule','delay_seconds':59,'_context':context})
+        self.complete(self.reserve(context)['ticket']);self.now=self.deadline();decision,old=self.claim()
+        self.r.action('wake_done',{'wake_id':decision['wake_id'],'outcome':'completed'})
+        with self.assertRaisesRegex(ValueError,'当前真人私聊'):
+            self.r.call('autonomy',{'action':'chat_schedule','delay_seconds':120,'_context':old})
+        disabled=self.inbound('2','关闭自主活动')
+        with self.assertRaisesRegex(ValueError,'未开启'):
+            self.r.call('autonomy',{'action':'chat_schedule','delay_seconds':120,'_context':disabled})
 
     def test_chat_claim_does_not_mutate_task_or_quota_state(self):
         context=self.inbound();task=self.r.call('task_loop',{'action':'register','goal':'另一个执行任务','_context':context})

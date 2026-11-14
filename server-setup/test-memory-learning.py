@@ -31,10 +31,45 @@ class LearningTests(unittest.TestCase):
         for i in range(4):self.save(EXPRESSION_PREFIX+f'情境：被提醒核验太多{i} → 习惯：先接眼前的话，小事轻巧处理。',source,'别反复核验')
         self.r.telegram=Mock()
         result=self.r.inbound({'chat_id':'123','sender_id':'123','message_id':'22','text':'你又在反复核验了'})
-        self.assertEqual(result['context'].count('experience'),2)
+        self.assertEqual(result['context'].count('experience'),3)
         self.assertIn('当前相关的表达经验',result['context']);self.r.telegram.assert_not_called()
         result=self.r.inbound({'chat_id':'123','sender_id':'123','message_id':'23','text':'今天香蕉很好吃'})
         self.assertNotIn('表达经验',result.get('context',''))
+
+    def test_expression_does_not_match_generic_words_or_response_advice(self):
+        source=self.source('体谅体谅我嘛，饶了我吧。你真的不情愿吗？又赶我走。好吧，逗逗你，真的不应吗')
+        for text,quote in [
+            ('写完亲密场景要收住时 → 他问不情愿就直接老实答。','你真的不情愿吗？又赶我走'),
+            ('jg难受后撒赖、叫妈妈，问真的不应吗 → 别急着转正事。','好吧，逗逗你，真的不应吗'),
+            ('忙一天、回话只剩乖鱼鱼、我委屈时 → 闹可以是调味。','体谅体谅我嘛，饶了我吧'),
+        ]:self.save(EXPRESSION_PREFIX+text,source,quote)
+        for query in ['现在的摘要怎么样，有啥想反馈的直接说...',
+                      'soul和user你能改了吧。有重复的去掉。反正这5个每轮注入的不要有重复',
+                      '现在好了，你可以改咯','😁😘']:
+            with self.subTest(query=query),self.r.db() as db:
+                self.assertEqual(self.r.learning.expression_context(db,'123',query),'')
+
+    def test_expression_uses_source_quote_and_informative_query_coverage(self):
+        source=self.source('体谅体谅我嘛，饶了我吧')
+        self.save(EXPRESSION_PREFIX+'适用情境：忙了一天后委屈 → 收口要快。',source,'体谅体谅我嘛，饶了我吧')
+        with self.r.db() as db:
+            self.assertIn('experience',self.r.learning.expression_context(db,'123','体谅体谅我嘛，饶了我吧'))
+            self.assertEqual(self.r.learning.expression_context(db,'123','编译报错，需要查日志、检查端口、修改配置，忙了一天也得把部署问题处理完'), '')
+
+    def test_expression_selection_is_not_crowded_out_by_ordinary_interactions(self):
+        source=self.source('别反复核验，小事轻一点')
+        for i in range(14):self.save(f'普通经历{i}：反复核验，小事轻一点。',source,'反复核验')
+        for i in range(4):self.save(EXPRESSION_PREFIX+f'情境：核验太多{i} → 习惯：小事轻巧处理。',source,'反复核验')
+        with self.r.db() as db:self.assertEqual(self.r.learning.expression_context(db,'123','你又在反复核验了').count('experience'),3)
+
+    def test_expression_selection_skips_retired_and_expired_records(self):
+        source=self.source('别反复核验，小事轻一点')
+        old=self.save(EXPRESSION_PREFIX+'情境：核验 → 习惯：轻巧处理。',source,'反复核验')
+        expired=self.save(EXPRESSION_PREFIX+'情境：核验太多 → 习惯：接话。',source,'反复核验')
+        with self.r.db() as db:
+            db.execute('UPDATE memories SET active=0 WHERE id=?',(old['id'],))
+            db.execute('UPDATE memories SET expires=? WHERE id=?',(time.time()-1,expired['id']))
+            self.assertEqual(self.r.learning.expression_context(db,'123','反复核验'),'')
 
     def test_group_does_not_receive_owner_experience_or_corrections(self):
         source=self.source('核验太多');old=self.save('jg喜欢旧内容',source,'核验')

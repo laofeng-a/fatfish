@@ -25,7 +25,7 @@ func withFatfishTurnEvent(ts *turnState, messages []providers.Message, wakeKind 
 		kind, source = "scheduled_wakeup", "后台定时唤醒"
 		switch wakeKind {
 		case "chat":
-			kind, source = "companion_tick", "两分钟自主陪聊机会"
+			kind, source = "companion_tick", "自主陪聊机会"
 		case "autonomy":
 			kind, source = "autonomy", "自主活动唤醒"
 		case "task":

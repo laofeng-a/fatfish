@@ -228,6 +228,8 @@ runtime.sqlite 的 `loop_autonomy(enabled,epoch,interval_seconds,next_due,note)`
 
 行为变化是两种入口共享同一个重置机会。验证相同与不同 provider 的同一时间窗口、一个窗口多个任务、任务完成仍监听、旧 epoch 撤销、处理失败、重复调用以及旧闹钟迁移后只有一个可领取机会。迁移范围必须先有实际待执行记录清单，再安排实现和验收。
 
+2026-11-15 14:34:26（UTC+8）只读盘点：线上 `silent_alarms` 中，`purpose` 含 quota 且状态为 pending/running 的记录为 **0 条**，包括旧 `quota_watch`、`quota_reset`。因此没有待执行项的创建时间或关联任务可列；历史另有 1 条 completed 的 `quota_reset`。完整查询条件和空清单保存在仓库外 `server-setup/state/summary-material-rpc-20261115/legacy-quota-inventory.json`。据此可以在后续获准的修改中停止旧入口创建，让旧路径自然退场，无需迁移待执行记录。本次仅查询，未修改排程、历史或代码。
+
 ## 建议保持的边界
 
 - **保留来源版本和自主 epoch。** 新真人输入只改变当前交流来源，总开关改变整批自主来源的有效性。E3 和 E6 说明它们不能互相替代。

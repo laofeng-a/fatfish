@@ -100,10 +100,13 @@ func modelDialogue(turns []Turn, thoughts bool) []ModelDialogue {
 }
 
 func ModelMaterials(m Material) ModelMaterial {
-	wire := ModelMaterial{Agreements: m.Previous.Agreements, Quotes: m.Previous.Quotes, Past: modelDialogue(m.Past, true), Recent: modelDialogue(m.Recent, false), From: m.From, To: m.To, Rejection: m.Rejection, Template: Candidate{From: m.From, To: m.To, Quotes: []Quote{}, Agreements: m.Previous.Agreements}, Homes: m.Homes}
+	wire := ModelMaterial{Agreements: m.Previous.Agreements, Quotes: m.Previous.Quotes, Past: modelDialogue(m.Past, true), Recent: modelDialogue(m.Recent, false), From: m.From, To: m.To, Rejection: m.Rejection, Template: Candidate{From: m.From, To: m.To, Quotes: []Quote{}, Agreements: []Agreement{}}, Homes: m.Homes}
 	wire.Contract = fmt.Sprintf("现在请生成候选JSON。本次新增过往范围为#%d至#%d；近期材料仅校正约定。quotes选少量原话，summary用{{q1}}等占位符插入原话，程序会加入实际说话人与逐字原文；其余内容用概括叙述。渲染后的正文与约定合计最多1800字。", m.From, m.To)
 	if m.Previous.Version > 0 {
 		previous := m.Previous
+		// The stored state remains complete for validation and automatic carry.
+		// The model receives the agreement records through confirmed_agreements.
+		previous.Agreements = nil
 		wire.Previous = &previous
 	} else {
 		wire.Legacy = m.Previous.Body

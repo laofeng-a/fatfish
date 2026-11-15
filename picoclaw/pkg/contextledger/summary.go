@@ -89,26 +89,9 @@ func proseQuoteHasSource(text string, m Material) bool {
 	return false
 }
 
-// This is a repair request, never a replacement summary or fallback extract.
-// The revised response must pass the same validation before it can activate.
-func QuoteRepairInstruction(c Candidate, m Material) string {
-	prose, _ := renderQuoteReferences(c.Summary, c.Quotes)
-	var missing []string
-	for _, quote := range proseQuotes.FindAllStringSubmatch(prose, -1) {
-		if !proseQuoteHasSource(quote[1], m) {
-			missing = append(missing, quote[1])
-		}
-	}
-	data, _ := json.Marshal(map[string]any{"reason": "unmatched_prose_quote", "unmatched_quoted_fragments": missing, "allowed_from": m.From, "allowed_to": m.To})
-	return "上一候选已拒绝，未替换旧记录。请根据原始材料核对并修正以下问题，返回完整候选JSON：有原文依据的引文放入quotes并用{{q1}}等引用；概括用叙述表达，缺少依据的内容删除。保留已有约定id和有效来源，覆盖范围保持不变。\n" + string(data)
-}
-
 // A single correction uses the same sources and validation as the first draft.
 // Provider failures and changed snapshots are handled by the caller.
 func CandidateRepairInstruction(c Candidate, m Material, reason string) string {
-	if reason == "unmatched_prose_quote" {
-		return QuoteRepairInstruction(c, m)
-	}
 	details := map[string]any{"reason": reason, "allowed_from": m.From, "allowed_to": m.To}
 	var guidance string
 	switch {
@@ -129,35 +112,12 @@ func CandidateRepairInstruction(c Candidate, m Material, reason string) string {
 		details["invalid_quotes"] = invalid
 		details["actual_dialogue"] = modelDialogue(sources, false)
 		guidance = "引文从同一说话人的原话连续取片段，逐字保留标点和换行。跨句摘录分别列为quotes；概括用正文叙述。"
-	case strings.HasPrefix(reason, "unverified_agreement_home:"):
-		var invalid []Agreement
-		for _, agreement := range c.Agreements {
-			if agreement.ID == strings.TrimPrefix(reason, "unverified_agreement_home:") {
-				invalid = append(invalid, agreement)
-			}
-		}
-		details["invalid_homes"] = invalid
-		guidance = "约定已核对来源的内容继续保留。home与home_quote只填写canonical_homes中确有的文件名及连续原文；归属待确认时两者留空，约定仍由独立记录承接。"
-	case strings.HasPrefix(reason, "agreement_omitted:"):
-		var missing []Agreement
-		for _, agreement := range m.Previous.Agreements {
-			if agreement.ID == strings.TrimPrefix(reason, "agreement_omitted:") {
-				missing = append(missing, agreement)
-			}
-		}
-		details["omitted_agreements"] = missing
-		guidance = "已有约定必须全部保留在agreements中：id、text、state、sources照原样沿用；只有出现新的原话依据时才改state并填写changed_by。home与home_quote在canonical_homes中找不到连续原文时两者留空，约定本身不要删除。"
 	case reason == "summary_too_long":
-		prose, _ := renderQuoteReferences(c.Summary, c.Quotes)
-		for _, agreement := range c.Agreements {
-			if text := renderAgreement(agreement); text != "" {
-				prose += "\n" + text
-			}
-		}
-		details["rendered_characters"] = utf8.RuneCountInString(prose)
+		body, _ := validateCandidate(c, m, "stop")
+		details["rendered_characters"] = utf8.RuneCountInString(body)
 		guidance = "把正文与独立约定合计缩到1800字符内，给约定留出空间；保留能自然接话的交流脉络和少量关键引文。"
 	case reason == "invalid_candidate_json" || strings.HasPrefix(reason, "generation_not_finished:"):
-		guidance = "上一输出未形成完整候选。请精简叙述与新增约定，生成完整且闭合的JSON。沿用candidate_template的字段、已有约定与覆盖范围，渲染正文加独立约定最多1800字符。"
+		guidance = "上一输出未形成完整候选。请精简叙述与新增约定，生成完整且闭合的JSON。沿用candidate_template的字段与覆盖范围，agreements只提交新增或有新依据的变化，已有约定由程序承接。渲染正文加独立约定最多1800字符。"
 	default:
 		return ""
 	}
@@ -238,6 +198,18 @@ func renderAgreement(a Agreement) string {
 // Agreements are rendered from the checked fields, so omission from prose does
 // not silently remove an existing agreement.
 func Validate(c Candidate, m Material, finish string) (string, error) {
+	body, err := validateCandidate(c, m, finish)
+	if err != nil {
+		return "", err
+	}
+	if utf8.RuneCountInString(body) > 1800 {
+		return "", fmt.Errorf("summary_too_long")
+	}
+	return body, nil
+}
+
+// The repair feedback counts the same rendered body, including carried agreements.
+func validateCandidate(c Candidate, m Material, finish string) (string, error) {
 	if finish != "stop" && finish != "end_turn" {
 		return "", fmt.Errorf("generation_not_finished:%s", finish)
 	}
@@ -339,9 +311,6 @@ func Validate(c Candidate, m Material, finish string) (string, error) {
 		if rendered := renderAgreement(a); rendered != "" {
 			body += "\n" + rendered
 		}
-	}
-	if utf8.RuneCountInString(body) > 1800 {
-		return "", fmt.Errorf("summary_too_long")
 	}
 	return body, nil
 }

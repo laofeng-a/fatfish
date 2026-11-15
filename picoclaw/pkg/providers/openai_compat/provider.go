@@ -489,11 +489,6 @@ func (p *Provider) Chat(
 	model string,
 	options map[string]any,
 ) (*LLMResponse, error) {
-	if fatfish.IsBackground(ctx) {
-		if _, err := fatfish.Call(ctx, "background_allowed", map[string]any{}); err != nil {
-			return nil, err
-		}
-	}
 	if p.apiBase == "" {
 		return nil, fmt.Errorf("API base not configured")
 	}

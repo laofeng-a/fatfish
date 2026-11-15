@@ -256,11 +256,6 @@ func (t *MCPTool) Parameters() map[string]any {
 func (t *MCPTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	startedAt := time.Now()
 	if t.serverName == "reader" || t.serverName == "deepseek" {
-		if toolshared.ToolSessionKey(ctx) == "heartbeat" {
-			if _, err := fatfish.Call(ctx, "background_allowed", map[string]any{}); err != nil {
-				return ErrorResult("后台活动已暂停或用户已回来，请结束这次活动")
-			}
-		}
 		copied := make(map[string]any, len(args)+1)
 		for key, value := range args {
 			if key != "_context" {

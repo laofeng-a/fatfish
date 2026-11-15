@@ -1,9 +1,61 @@
 package contextledger
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
+
+func TestRepairLengthIncludesAutomaticallyCarriedAgreements(t *testing.T) {
+	m, c := proseFixture()
+	m.Previous.Agreements = []Agreement{{ID: "carry", Text: "这条已有约定需要完整保留在通过的摘要中", State: "active", Sources: []Quote{{Turn: 1, Speaker: "jg", Text: "原话就在这里"}}}}
+	c.Summary = strings.Repeat("字", 1790)
+	if _, err := Validate(c, m, "stop"); err == nil || err.Error() != "summary_too_long" {
+		t.Fatal("carried agreement did not count toward the limit", err)
+	}
+	instruction := CandidateRepairInstruction(c, m, "summary_too_long")
+	var details struct {
+		Characters int `json:"rendered_characters"`
+	}
+	if err := json.Unmarshal([]byte(instruction[strings.LastIndex(instruction, "\n")+1:]), &details); err != nil {
+		t.Fatal(err)
+	}
+	if details.Characters <= 1800 {
+		t.Fatal("repair feedback ignored carried agreements", details.Characters)
+	}
+}
+
+func TestChangesOnlyAndLegacyFullAgreementCandidatesAreAccepted(t *testing.T) {
+	for _, fullCopy := range []bool{false, true} {
+		s, scope, m, c := candidateFixture(t)
+		old := Agreement{ID: "carry", Text: "保持这项约定", State: "active", Sources: []Quote{{Turn: 1, Speaker: "jg", Text: "可以开始"}}}
+		data, _ := json.Marshal(old)
+		if _, err := s.DB.Exec("INSERT INTO context_agreements VALUES(?,?,?)", scope.Session, old.ID, string(data)); err != nil {
+			t.Fatal(err)
+		}
+		m.Previous.Agreements = []Agreement{old}
+		c.Agreements = []Agreement{}
+		if fullCopy {
+			c.Agreements = []Agreement{old}
+		}
+		raw, _ := json.Marshal(c)
+		parsed, err := ParseCandidate(string(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := Validate(parsed, m, "stop")
+		if err != nil || strings.Count(body, old.Text) != 1 {
+			t.Fatal("candidate compatibility changed", fullCopy, body, err)
+		}
+		if _, err = s.RecordCandidate(scope.Session, m, parsed, string(raw), body, "", true, 0); err != nil {
+			t.Fatal(err)
+		}
+		st, err := s.State(scope.Session)
+		if err != nil || len(st.Agreements) != 1 || st.Agreements[0].Text != old.Text || st.Agreements[0].State != "active" {
+			t.Fatal("program carry lost the agreement", fullCopy, st, err)
+		}
+	}
+}
 
 func proseFixture() (Material, Candidate) {
 	m := Material{From: 1, To: 1, Past: []Turn{{Number: 1, Kind: "human", User: "原话就在这里", Complete: true}}}
@@ -182,16 +234,6 @@ func TestNewAgreementWithInventedHomeIsStoredWithoutHome(t *testing.T) {
 	}
 	if len(st.Agreements) != 1 || st.Agreements[0].Home != "" || st.Agreements[0].HomeQuote != "" || !strings.Contains(body, "主动找他聊") {
 		t.Fatalf("invented home was stored or agreement lost: %+v %s", st.Agreements, body)
-	}
-}
-
-func TestOmittedAgreementRepairListsMissingAgreement(t *testing.T) {
-	kept := Agreement{ID: "comfort", Text: "他累时直接陪聊", State: "active", Sources: []Quote{{Turn: 1, Speaker: "jg", Text: "可以开始"}}}
-	m := Material{From: 1, To: 1}
-	m.Previous.Agreements = []Agreement{kept}
-	got := CandidateRepairInstruction(Candidate{}, m, "agreement_omitted:comfort")
-	if !strings.Contains(got, "omitted_agreements") || !strings.Contains(got, "他累时直接陪聊") {
-		t.Fatal("omitted agreement repair lacks the missing agreement", got)
 	}
 }
 

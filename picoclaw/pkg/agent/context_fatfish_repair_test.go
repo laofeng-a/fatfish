@@ -75,11 +75,6 @@ func TestFatfishSummaryRepairsRecordedFailureKinds(t *testing.T) {
 						candidate.Summary = strings.Repeat("当时两人接着说。", 300)
 					}
 				}
-				if kind == "home" && calls == 2 {
-					if material.Homes["USER.md"] != "认真问题按需要讲清楚。" {
-						t.Fatal("canonical source missing from generation input")
-					}
-				}
 				raw, _ := json.Marshal(candidate)
 				return &providers.LLMResponse{Content: string(raw), FinishReason: finish}, nil
 			}}

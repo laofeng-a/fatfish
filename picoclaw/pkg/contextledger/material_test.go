@@ -99,3 +99,40 @@ func TestQuoteReferencesRenderExactSpeakerAndOriginalPunctuation(t *testing.T) {
 		t.Fatal("rendering bypassed source validation")
 	}
 }
+
+func TestModelMaterialsKeepOneAgreementSourceAndEmptyTemplate(t *testing.T) {
+	agreement := Agreement{ID: "fixture-agreement", Text: "保留已确认的约定", State: "active", Sources: []Quote{{Turn: 1, Speaker: "jg", Text: "按这个执行"}}}
+	for _, version := range []int64{0, 1} {
+		m := Material{Previous: State{Version: version, Body: "已有记录", Agreements: []Agreement{agreement}}, From: 2, To: 2}
+		raw, err := ModelMaterialJSON(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Count(string(raw), `"id":"fixture-agreement"`) != 1 {
+			t.Fatal("agreement records must have one source", string(raw))
+		}
+		wire := ModelMaterials(m)
+		if len(wire.Agreements) != 1 || wire.Template.Agreements == nil || len(wire.Template.Agreements) != 0 {
+			t.Fatalf("confirmed agreement or template shape changed: %+v", wire)
+		}
+		if version > 0 && (wire.Previous == nil || len(wire.Previous.Agreements) != 0 || wire.Previous.Body != m.Previous.Body) {
+			t.Fatalf("previous summary was lost or still repeats agreements: %+v", wire.Previous)
+		}
+		if len(m.Previous.Agreements) != 1 || m.Previous.Agreements[0].ID != agreement.ID {
+			t.Fatal("validation material was mutated")
+		}
+	}
+}
+
+func TestHistoricalRejectionReasonsRemainDiagnosticMaterial(t *testing.T) {
+	for _, reason := range []string{"unmatched_prose_quote", "unverified_agreement_home:fixture", "agreement_omitted:fixture"} {
+		m := Material{From: 1, To: 1, Rejection: reason}
+		raw, err := ModelMaterialJSON(m)
+		if err != nil || !strings.Contains(string(raw), reason) {
+			t.Fatal("historical diagnostic lost", reason, err)
+		}
+		if instruction := CandidateRepairInstruction(Candidate{}, m, reason); instruction != "" {
+			t.Fatal("retired reason still starts an automatic repair", reason)
+		}
+	}
+}
